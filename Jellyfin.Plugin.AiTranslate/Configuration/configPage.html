@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>AI Translate</title>
+</head>
+<body>
+    <div id="AiTranslateConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-checkbox,emby-textarea">
+        <div data-role="content">
+            <div class="content-primary">
+                <form id="AiTranslateConfigForm">
+                    <div class="verticalSection">
+                        <h2 class="sectionTitle">AI Translate</h2>
+                        <p>Subtitles generated from the audio track. Open a film → <b>⋮ → Edit subtitles → Search</b>: each provider combination is listed with its estimated price. Nothing is charged until you pick one; automatic subtitle downloads never start a paid job.</p>
+                    </div>
+
+                    <h3>This month</h3>
+                    <div id="aiStatus" class="fieldDescription">…</div>
+
+                    <h3>API keys</h3>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="OpenAiApiKey">OpenAI API key</label>
+                        <input id="OpenAiApiKey" type="password" is="emby-input" autocomplete="off" />
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="GeminiApiKey">Google Gemini API key</label>
+                        <input id="GeminiApiKey" type="password" is="emby-input" autocomplete="off" />
+                        <div class="fieldDescription">From Google AI Studio. Keys are stored in Jellyfin's plugin configuration on this server.</div>
+                    </div>
+
+                    <h3>Providers offered</h3>
+                    <div class="checkboxContainer"><label class="emby-checkbox-label"><input id="EnableOpenAiTranscription" type="checkbox" is="emby-checkbox" /><span>Speech recognition: OpenAI</span></label></div>
+                    <div class="checkboxContainer"><label class="emby-checkbox-label"><input id="EnableGeminiTranscription" type="checkbox" is="emby-checkbox" /><span>Speech recognition: Google Gemini</span></label></div>
+                    <div class="checkboxContainer"><label class="emby-checkbox-label"><input id="EnableOpenAiTranslation" type="checkbox" is="emby-checkbox" /><span>Translation: OpenAI</span></label></div>
+                    <div class="checkboxContainer"><label class="emby-checkbox-label"><input id="EnableGeminiTranslation" type="checkbox" is="emby-checkbox" /><span>Translation: Google Gemini</span></label></div>
+
+                    <h3>Languages and limits</h3>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="TargetLanguages">Subtitle languages</label>
+                        <input id="TargetLanguages" type="text" is="emby-input" />
+                        <div class="fieldDescription">ISO 639-1, comma separated (e.g. <code>bg</code> or <code>bg,en,de</code>). Empty = any language you search for. The film can be in any language.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="MonthlyBudgetUsd">Monthly limit (USD, estimated)</label>
+                        <input id="MonthlyBudgetUsd" type="number" step="0.5" min="0" is="emby-input" />
+                        <div class="fieldDescription">A job that would go over the limit is refused. 0 = no limit.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="textareaLabel" for="TranslationInstructions">Extra instructions for the translator</label>
+                        <textarea id="TranslationInstructions" is="emby-textarea" rows="2" placeholder="e.g. Use informal address between friends. Keep 'Captain' as 'капитане'."></textarea>
+                    </div>
+
+                    <details>
+                        <summary>Models and prices</summary>
+                        <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="OpenAiTranscribeModel">OpenAI speech model (must return timestamps)</label><input id="OpenAiTranscribeModel" type="text" is="emby-input" /></div>
+                        <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="OpenAiTextModel">OpenAI translation model</label><input id="OpenAiTextModel" type="text" is="emby-input" /></div>
+                        <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="GeminiTranscribeModel">Gemini speech model</label><input id="GeminiTranscribeModel" type="text" is="emby-input" /></div>
+                        <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="GeminiTextModel">Gemini translation model</label><input id="GeminiTextModel" type="text" is="emby-input" /></div>
+                        <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="PriceOpenAiTranscribePerMinute">OpenAI speech, USD / minute</label><input id="PriceOpenAiTranscribePerMinute" type="number" step="0.0001" is="emby-input" /></div>
+                        <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="PriceGeminiTranscribePerMinute">Gemini speech, USD / minute</label><input id="PriceGeminiTranscribePerMinute" type="number" step="0.0001" is="emby-input" /></div>
+                        <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="PriceOpenAiTextInputPerMTok">OpenAI text input, USD / 1M tokens</label><input id="PriceOpenAiTextInputPerMTok" type="number" step="0.01" is="emby-input" /></div>
+                        <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="PriceOpenAiTextOutputPerMTok">OpenAI text output, USD / 1M tokens</label><input id="PriceOpenAiTextOutputPerMTok" type="number" step="0.01" is="emby-input" /></div>
+                        <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="PriceGeminiTextInputPerMTok">Gemini text input, USD / 1M tokens</label><input id="PriceGeminiTextInputPerMTok" type="number" step="0.01" is="emby-input" /></div>
+                        <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="PriceGeminiTextOutputPerMTok">Gemini text output, USD / 1M tokens</label><input id="PriceGeminiTextOutputPerMTok" type="number" step="0.01" is="emby-input" /></div>
+                        <div class="fieldDescription">Used for estimates and the cost log. The provider's invoice is what counts.</div>
+                    </details>
+
+                    <div>
+                        <button is="emby-button" type="submit" class="raised button-submit block emby-button"><span>Save</span></button>
+                    </div>
+                </form>
+            </div>
+        </div>
+        <script type="text/javascript">
+            (function () {
+                var pluginId = '4cad7295-fa8b-46c9-a2e0-b6e5abe8a234';
+                var checks = ['EnableOpenAiTranscription', 'EnableGeminiTranscription', 'EnableOpenAiTranslation', 'EnableGeminiTranslation'];
+                var texts = ['OpenAiApiKey', 'GeminiApiKey', 'TargetLanguages', 'TranslationInstructions', 'OpenAiTranscribeModel', 'OpenAiTextModel', 'GeminiTranscribeModel', 'GeminiTextModel'];
+                var numbers = ['MonthlyBudgetUsd', 'PriceOpenAiTranscribePerMinute', 'PriceGeminiTranscribePerMinute', 'PriceOpenAiTextInputPerMTok', 'PriceOpenAiTextOutputPerMTok', 'PriceGeminiTextInputPerMTok', 'PriceGeminiTextOutputPerMTok'];
+                var page = document.querySelector('#AiTranslateConfigPage');
+
+                function esc(s) { var d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
+
+                function loadStatus() {
+                    ApiClient.getJSON(ApiClient.getUrl('AiTranslate/Status')).then(function (s) {
+                        var html = '<b>$' + s.MonthTotalUsd.toFixed(2) + '</b>' + (s.BudgetUsd > 0 ? ' of $' + s.BudgetUsd.toFixed(2) : '') + ' this month (estimated).';
+                        (s.ByProvider || []).forEach(function (p) {
+                            html += '<br>' + esc(p.Name) + ': $' + p.CostUsd.toFixed(3) + (p.Minutes ? ' · ' + p.Minutes.toFixed(1) + ' min audio' : '') + (p.InputTokens ? ' · ' + p.InputTokens + ' in / ' + p.OutputTokens + ' out tokens' : '');
+                        });
+                        (s.Running || []).forEach(function (j) {
+                            html += '<br>⏳ ' + esc(j.Title) + ' → ' + esc(j.TargetLanguage) + ': ' + esc(j.Stage);
+                        });
+                        page.querySelector('#aiStatus').innerHTML = html;
+                    });
+                }
+
+                page.addEventListener('pageshow', function () {
+                    Dashboard.showLoadingMsg();
+                    ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+                        checks.forEach(function (k) { page.querySelector('#' + k).checked = config[k]; });
+                        texts.concat(numbers).forEach(function (k) { page.querySelector('#' + k).value = config[k] == null ? '' : config[k]; });
+                        Dashboard.hideLoadingMsg();
+                    });
+                    loadStatus();
+                });
+
+                page.querySelector('#AiTranslateConfigForm').addEventListener('submit', function (e) {
+                    e.preventDefault();
+                    Dashboard.showLoadingMsg();
+                    ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+                        checks.forEach(function (k) { config[k] = page.querySelector('#' + k).checked; });
+                        texts.forEach(function (k) { config[k] = page.querySelector('#' + k).value.trim(); });
+                        numbers.forEach(function (k) { config[k] = parseFloat(page.querySelector('#' + k).value) || 0; });
+                        ApiClient.updatePluginConfiguration(pluginId, config).then(function (result) {
+                            Dashboard.processPluginConfigurationUpdateResult(result);
+                            loadStatus();
+                        });
+                    });
+                    return false;
+                });
+            })();
+        </script>
+    </div>
+</body>
+</html>

@@ -1,0 +1,43 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using Jellyfin.Plugin.AiTranslate.Configuration;
+using MediaBrowser.Common.Configuration;
+using MediaBrowser.Common.Plugins;
+using MediaBrowser.Model.Plugins;
+using MediaBrowser.Model.Serialization;
+
+namespace Jellyfin.Plugin.AiTranslate;
+
+/// <summary>AI Translate: subtitles from the audio track (speech recognition + LLM translation) as a Jellyfin subtitle provider.</summary>
+public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
+{
+    public static readonly Guid PluginId = Guid.Parse("4cad7295-fa8b-46c9-a2e0-b6e5abe8a234");
+
+    public Plugin(IApplicationPaths applicationPaths, IXmlSerializer xmlSerializer)
+        : base(applicationPaths, xmlSerializer)
+    {
+        Instance = this;
+    }
+
+    public static Plugin? Instance { get; private set; }
+
+    public override string Name => "AI Translate";
+
+    public override Guid Id => PluginId;
+
+    public override string Description =>
+        "Generates subtitles from a film's audio with speech recognition (OpenAI, Google) and translates them with an LLM. Shows up in Jellyfin's subtitle search with the price before you choose.";
+
+    public IEnumerable<PluginPageInfo> GetPages()
+    {
+        return
+        [
+            new PluginPageInfo
+            {
+                Name = Name,
+                EmbeddedResourcePath = string.Format(CultureInfo.InvariantCulture, "{0}.Configuration.configPage.html", GetType().Namespace)
+            }
+        ];
+    }
+}
