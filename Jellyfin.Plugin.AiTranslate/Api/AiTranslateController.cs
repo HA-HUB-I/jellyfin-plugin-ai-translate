@@ -47,17 +47,35 @@ public sealed class AiTranslateController : ControllerBase
     }
 
     [HttpGet("Dub/Estimate")]
-    public async Task<ActionResult<DubEstimate>> DubEstimate([FromQuery] Guid itemId, [FromQuery] string language = "bg", CancellationToken cancellationToken = default)
+    public async Task<ActionResult<DubEstimate>> DubEstimate(
+        [FromQuery] Guid itemId,
+        [FromQuery] string language = "bg",
+        [FromQuery] string? provider = null,
+        [FromQuery] string? voice = null,
+        CancellationToken cancellationToken = default)
     {
-        return Ok(await _dub.EstimateAsync(itemId, language, cancellationToken).ConfigureAwait(false));
+        return Ok(await _dub.EstimateAsync(itemId, language, provider, voice, cancellationToken).ConfigureAwait(false));
     }
 
-    [HttpGet("Dub/Voices")]
-    public ActionResult<object> DubVoices() => Ok(_dub.Tts.Voices.Select(v => new { v.Id, v.Description }));
+    /// <summary>Voice providers that have a key, with their voices and today's quota.</summary>
+    [HttpGet("Dub/Providers")]
+    public ActionResult<object> DubProviders()
+    {
+        var config = Plugin.Instance?.Configuration ?? new Configuration.PluginConfiguration();
+        return Ok(_dub.Providers.Select(p => new
+        {
+            p.Id,
+            Name = p.DisplayName(config),
+            RequestsPerDay = p.RequestsPerDay(config),
+            UsedToday = _dub.Quota.UsedToday(p.Id + ":" + p.Model(config), DateTime.UtcNow),
+            Voices = p.Voices.Select(v => new { v.Id, v.Description }),
+        }));
+    }
 
     [HttpPost("Dub/Start")]
-    public ActionResult DubStart([FromQuery] Guid itemId, [FromQuery] string language = "bg", [FromQuery] string? voice = null)
+    public ActionResult DubStart([FromQuery] Guid itemId, [FromQuery] string language = "bg", [FromQuery] string? provider = null, [FromQuery] string? voice = null)
     {
-        return _dub.Start(itemId, language, voice) ? Accepted() : Conflict("Already running");
+        string? refused = _dub.Start(itemId, language, provider, voice);
+        return refused is null ? Accepted() : Conflict(refused);
     }
 }

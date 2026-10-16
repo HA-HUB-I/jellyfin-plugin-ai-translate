@@ -63,6 +63,53 @@ The settings page shows this month's spend per provider/model (audio minutes, to
 limit**; a job that would exceed it is refused. The provider's invoice is what counts — the plugin's numbers
 are estimates from token counts and list prices.
 
+## Voice-over (AI dubbing)
+
+Dashboard → Plugins → AI Translate → **Дублаж**: search a film that has subtitles in your language, press
+**Цена** for the estimate, pick provider and voice, press **Озвучи**. Manual only — nothing is dubbed
+automatically.
+
+How it works:
+
+1. **Text and timing come from the subtitles** in the target language (any source: human subtitles,
+   OpenSubtitles, or ones this plugin made). The film's own audio is *not* recognised again for dubbing.
+2. Song-only lines (♪ …) are skipped; short neighbouring lines are joined; ~10 lines go into one request
+   with a pause marker between them, and the returned audio is cut back into lines at the pauses.
+3. Each line is placed at its subtitle time; if it is too long it is sped up (up to 1.3×), otherwise the
+   next line moves a little later and catches up in the next gap.
+4. **TV-style voice-over**: the original soundtrack stays underneath and is turned down automatically while
+   the narrator speaks (sidechain ducking).
+5. The result is a separate audio file next to the film, `Film.bg.mka`, which Jellyfin shows as the audio
+   track **"Български (AI войсоувър)"**. The video file is never modified.
+
+One narrator voice for everyone (Bulgarian TV style). Separate voices per speaker would need speaker
+detection from the audio; that is on the roadmap.
+
+Measured: *The Mongoose* (98 min, 638 lines) with Gemini 3.8 Flash-Lite TTS — 64 requests, 10 minutes,
+**$0.32**.
+
+| Provider | Voices | Bulgarian | Price (list) | Limits |
+|---|---|---|---|---|
+| Google Gemini `gemini-3.8-flash-tts` | 30 (12 offered) | native | $9 / 1M audio tokens ≈ $0.0135/min (doubles from 2027-01-01) | **Tier 1: 10 requests/min, 100 requests/day** |
+| Google Gemini `gemini-3.8-flash-lite-tts` | same | native | $6 / 1M ≈ $0.009/min | own quota, same Tier 1 limits |
+| OpenAI `gpt-4o-mini-tts` | 13 | works, voices tuned for English | $12 / 1M audio tokens (≈ $0.015/min) | 2000 requests/min, 2000 input tokens per request |
+
+## Limits and safeguards
+
+Providers limit how much you may use per minute and per day, and every job costs money. The plugin:
+
+| Risk | What the plugin does |
+|---|---|
+| Spending too much | **Monthly budget** (default $10): a job whose estimate would exceed it is refused. Every request is written to a cost log (settings page, per provider and model). |
+| Paying by accident | Subtitle search shows the **price before you choose**; automatic subtitle downloads (library scans) never start a paid job; dubbing is manual only. |
+| Requests per minute (Gemini Transcribe: 10 000 audio tokens/min; Gemini TTS: 10 requests/min on Tier 1) | Requests are **paced** to the configured limit; a `429` with "retry in Ns" is retried after that time. |
+| Requests per day (Gemini TTS: 100/day on Tier 1) | Lines are **batched ~10 per request** (a film needs ~60–70). Requests are **counted per day**; the estimate shows "today X / 100" and warns in red when a film needs more than is left. Start is refused when nothing is left. A daily-quota `429` stops the job at once (no pointless retries) with a message saying when the quota resets (00:00 UTC). |
+| Losing work when a limit hits | Every recognised transcript, translation and spoken line is **cached on disk**. Running the same job again continues where it stopped and does not pay again for what is done. |
+| Client gives up waiting (subtitles) | The job keeps running; Jellyfin still saves the subtitle when it finishes. |
+
+Limits differ per account tier and change over time; set yours in **Models and prices** (requests per
+minute/day, tokens per minute, prices). Google shows your actual limits in AI Studio → Rate limits.
+
 ## Install
 
 1. Dashboard → Plugins → Repositories → add
@@ -82,8 +129,8 @@ configuration on your server.
 
 ## Roadmap
 
-- AI voice-over / dubbing for selected films (Google Cloud TTS `bg-BG` Chirp3-HD voices, OpenAI TTS) as an
-  extra audio track — manual, per film.
+- Google Cloud Text-to-Speech (`bg-BG` Chirp3-HD, 30 Bulgarian voices, much higher quotas).
+- Separate voices per speaker (speaker detection + male/female voice).
 - More providers (Deepgram, ElevenLabs, Anthropic, DeepL).
 
 ## Български
@@ -92,6 +139,12 @@ configuration on your server.
 Google Gemini) и превежда с езиков модел на български (или друг език). Появява се в търсенето на субтитри
 на Jellyfin с прогнозна цена за всеки вариант; таксува се само при избор. Има месечен лимит и дневник на
 разходите в настройките.
+
+**Дублаж (войсоувър):** озвучава ръчно избран филм от българските му субтитри — един диктор, оригиналният
+звук остава отдолу, като по телевизията. Резултатът е отделна аудиопътечка „Български (AI войсоувър)“;
+видеото не се пипа. Лимитите на доставчиците (заявки в минута/ден) се спазват автоматично, оценката
+предупреждава, ако филмът не се побира в днешния лимит, а прекъсната работа продължава безплатно оттам,
+докъдето е стигнала.
 
 ## License
 

@@ -96,6 +96,19 @@ public class PluginConfiguration : BasePluginConfiguration
 
     public string GeminiTtsModel { get; set; } = "gemini-3.8-flash-tts";
 
+    /// <summary>Gets or sets the voice provider used by default ("gemini" or "openai").</summary>
+    public string DubProvider { get; set; } = "gemini";
+
+    public string OpenAiTtsModel { get; set; } = "gpt-4o-mini-tts";
+
+    /// <summary>Gets or sets the OpenAI TTS requests-per-minute pace (the model allows 2000 at the first paid tier).</summary>
+    public int OpenAiTtsRequestsPerMinute { get; set; } = 300;
+
+    /// <summary>Gets or sets the estimated OpenAI TTS price per minute of speech (audio output $12 per 1M tokens).</summary>
+    public double PriceOpenAiTtsPerMinute { get; set; } = 0.015;
+
+    public double PriceOpenAiTtsInputPerMTok { get; set; } = 0.6;
+
     /// <summary>Gets or sets the prebuilt voice (Charon, Kore, Puck, Zephyr, …).</summary>
     public string DubVoice { get; set; } = "Charon";
 

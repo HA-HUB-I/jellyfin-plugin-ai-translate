@@ -44,25 +44,39 @@ public sealed class GeminiTts : ITtsProvider
         ("Sulafat", "женски, топъл"),
     ];
 
+    public string Model(PluginConfiguration config) => config.GeminiTtsModel;
+
     public string DisplayName(PluginConfiguration config) => "Google Gemini " + config.GeminiTtsModel;
 
     public bool IsAvailable(PluginConfiguration config) => !string.IsNullOrWhiteSpace(config.GeminiApiKey);
 
+    // Inline tag the model turns into a ~1 s pause (verified: not read aloud).
+    public string LineSeparator(PluginConfiguration config) => config.DubLineSeparator;
+
+    public int RequestsPerMinute(PluginConfiguration config) => config.GeminiTtsRequestsPerMinute;
+
+    public int RequestsPerDay(PluginConfiguration config) => config.GeminiTtsRequestsPerDay;
+
     public double Estimate(int characters, double seconds, PluginConfiguration config) =>
         ((characters / 3.0 * config.PriceGeminiTtsInputPerMTok) + (seconds * AudioTokensPerSecond * config.PriceGeminiTtsAudioPerMTok)) / 1_000_000;
 
-    public Task<SpeechClip> SynthesizeAsync(string text, string voice, string style, PluginConfiguration config, CancellationToken cancellationToken) =>
-        RateLimit.RetryAsync(
-            async () =>
-            {
-                await _pacer.WaitAsync(config.GeminiTtsRequestsPerMinute, cancellationToken).ConfigureAwait(false);
-                return await SynthesizeOnceAsync(text, voice, style, config, cancellationToken).ConfigureAwait(false);
-            },
-            cancellationToken);
-
-    /// <summary>Wall-clock time for <paramref name="requests"/> requests at the tier's pace.</summary>
-    public static TimeSpan PacedTime(int requests, PluginConfiguration config) =>
-        TimeSpan.FromMinutes(requests / (double)Math.Max(1, config.GeminiTtsRequestsPerMinute));
+    public async Task<SpeechClip> SynthesizeAsync(string text, string voice, string style, PluginConfiguration config, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await RateLimit.RetryAsync(
+                async () =>
+                {
+                    await _pacer.WaitAsync(config.GeminiTtsRequestsPerMinute, cancellationToken).ConfigureAwait(false);
+                    return await SynthesizeOnceAsync(text, voice, style, config, cancellationToken).ConfigureAwait(false);
+                },
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (HttpRequestException ex) when (ex.Message.Contains("per day", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new DailyQuotaException(ex.Message, ex);
+        }
+    }
 
     internal static (byte[] Wav, long InputTokens, long OutputTokens) ParseInteraction(string body)
     {

@@ -98,7 +98,39 @@ public class DubTests
         }
 
         Assert.InRange(sw.ElapsedMilliseconds, 280, 1000);
-        Assert.Equal(TimeSpan.FromMinutes(63.8), GeminiTts.PacedTime(638, new Configuration.PluginConfiguration()));
+    }
+
+    [Fact]
+    public void QuotaCountsPerUtcDayAndResetsAtMidnightUtc()
+    {
+        var dir = System.IO.Directory.CreateTempSubdirectory("ai-quota-").FullName;
+        try
+        {
+            var q = new Billing.QuotaTracker(dir);
+            var at1237Sofia = new DateTime(2026, 10, 16, 9, 37, 0, DateTimeKind.Utc);
+            q.Add("gemini:gemini-3.8-flash-tts", 64, at1237Sofia);
+            q.MarkExhausted("gemini:gemini-3.8-flash-tts", 100, at1237Sofia);
+
+            Assert.Equal(100, q.UsedToday("gemini:gemini-3.8-flash-tts", at1237Sofia));
+            Assert.Equal(0, q.UsedToday("gemini:gemini-3.8-flash-lite-tts", at1237Sofia));
+
+            // Google: "retry in 14h22m" at 09:37 UTC → 23:59 UTC; the next day starts clean.
+            Assert.Equal(new DateTime(2026, 10, 17, 0, 0, 0, DateTimeKind.Utc), Billing.QuotaTracker.NextResetUtc(at1237Sofia));
+            Assert.Equal(0, q.UsedToday("gemini:gemini-3.8-flash-tts", at1237Sofia.AddHours(14.5)));
+        }
+        finally
+        {
+            System.IO.Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void VoiceFallsBackToProviderDefault()
+    {
+        var openAi = new OpenAiTts(null!);
+        Assert.Equal("onyx", DubService.GetVoice(openAi, "Charon"));   // Gemini voice name → OpenAI default
+        Assert.Equal("marin", DubService.GetVoice(openAi, "Marin"));
+        Assert.Equal("Kore", DubService.GetVoice(new GeminiTts(null!), "kore"));
     }
 
     private static short[] Tone(double seconds, int rate = 24000) =>

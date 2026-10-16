@@ -34,7 +34,11 @@ public sealed record DubEstimate(
     double Minutes,
     bool Exists,
     int Requests = 0,
-    int RequestsPerDay = 0);
+    int RequestsPerDay = 0,
+    int UsedToday = 0,
+    DateTime? QuotaResetUtc = null,
+    string Provider = "",
+    string Voice = "");
 
 /// <summary>Voice-over: Bulgarian (target-language) subtitles → TTS → ducked mix with the original audio → "Film.bg.mka".</summary>
 public sealed class DubService
@@ -42,7 +46,7 @@ public sealed class DubService
     public const string TrackTitle = "Български (AI войсоувър)";
     private const int OutputRate = 48000;
 
-    private readonly ITtsProvider _tts;
+    private readonly IReadOnlyList<ITtsProvider> _providers;
     private readonly ILibraryManager _libraryManager;
     private readonly IProviderManager _providerManager;
     private readonly IFileSystem _fileSystem;
@@ -54,7 +58,8 @@ public sealed class DubService
     private readonly ConcurrentDictionary<Guid, JobStatus> _status = new();
 
     public DubService(
-        GeminiTts tts,
+        GeminiTts gemini,
+        OpenAiTts openAi,
         ILibraryManager libraryManager,
         IProviderManager providerManager,
         IFileSystem fileSystem,
@@ -63,7 +68,7 @@ public sealed class DubService
         SubtitleJobService jobs,
         ILogger<DubService> logger)
     {
-        _tts = tts;
+        _providers = [gemini, openAi];
         _libraryManager = libraryManager;
         _providerManager = providerManager;
         _fileSystem = fileSystem;
@@ -71,11 +76,38 @@ public sealed class DubService
         _appPaths = appPaths;
         _jobs = jobs;
         _logger = logger;
+        Quota = new QuotaTracker(DataFolder);
     }
 
     public IReadOnlyCollection<JobStatus> Running => _status.Values.ToList();
 
-    public ITtsProvider Tts => _tts;
+    public QuotaTracker Quota { get; }
+
+    /// <summary>Voice providers that have a key.</summary>
+    public IEnumerable<ITtsProvider> Providers => _providers.Where(p => p.IsAvailable(Config));
+
+    /// <summary>The requested provider, else the configured one, else the first with a key.</summary>
+    public ITtsProvider GetProvider(string? id) =>
+        Providers.FirstOrDefault(p => p.Id == id)
+        ?? Providers.FirstOrDefault(p => p.Id == Config.DubProvider)
+        ?? Providers.FirstOrDefault()
+        ?? throw new InvalidOperationException("Няма въведен API ключ за доставчик на глас (Gemini или OpenAI).");
+
+    /// <summary>The requested voice if the provider has it, else the configured one, else the provider's first.</summary>
+    public static string GetVoice(ITtsProvider tts, string? voice)
+    {
+        foreach (var v in new[] { voice, Config.DubVoice })
+        {
+            if (!string.IsNullOrWhiteSpace(v) && tts.Voices.Any(x => string.Equals(x.Id, v, StringComparison.OrdinalIgnoreCase)))
+            {
+                return tts.Voices.First(x => string.Equals(x.Id, v, StringComparison.OrdinalIgnoreCase)).Id;
+            }
+        }
+
+        return tts.Voices[0].Id;
+    }
+
+    private static string QuotaKey(ITtsProvider tts, PluginConfiguration config) => tts.Id + ":" + tts.Model(config);
 
     private static PluginConfiguration Config => Plugin.Instance?.Configuration ?? new PluginConfiguration();
 
@@ -94,30 +126,57 @@ public sealed class DubService
         return items.OfType<Video>().Where(v => FindSubtitle(v, language) is not null);
     }
 
-    public async Task<DubEstimate> EstimateAsync(Guid itemId, string language, CancellationToken cancellationToken)
+    public async Task<DubEstimate> EstimateAsync(Guid itemId, string language, string? providerId, string? voice, CancellationToken cancellationToken)
     {
+        var config = Config;
+        var tts = GetProvider(providerId);
+        voice = GetVoice(tts, voice);
         var video = GetVideo(itemId);
         var stream = FindSubtitle(video, language) ?? throw new InvalidOperationException("Няма текстови субтитри на " + language);
-        var segments = DubPlanner.Plan(await ReadSubtitleAsync(video, stream, cancellationToken).ConfigureAwait(false), Config.DubSkipSongs);
-        int chars = segments.Sum(s => s.Text.Length);
-        double seconds = chars / DubPlanner.CharactersPerSecond;
-        double cost = _tts.Estimate(chars, seconds, Config) * (1 - CachedShare(video, segments));
-        var config = Config;
-        var missing = Enumerable.Range(0, segments.Count).Where(i => !File.Exists(ClipPath(video, config.DubVoice, config, segments[i].Text))).ToList();
+        var segments = DubPlanner.Plan(await ReadSubtitleAsync(video, stream, cancellationToken).ConfigureAwait(false), config.DubSkipSongs);
+        var missing = Enumerable.Range(0, segments.Count).Where(i => !File.Exists(ClipPath(video, tts, voice, config, segments[i].Text))).ToList();
+        int chars = missing.Sum(i => segments[i].Text.Length);
+        double seconds = segments.Sum(s => s.Text.Length) / DubPlanner.CharactersPerSecond;
+        double cost = tts.Estimate(chars, chars / DubPlanner.CharactersPerSecond, config);
         int requests = Batches(missing, segments, config).Count;
         double minutes = 3 + Math.Max(
-            GeminiTts.PacedTime(requests, config).TotalMinutes,
+            requests / (double)Math.Max(1, tts.RequestsPerMinute(config)),
             requests * 20.0 / 60 / Math.Max(1, config.DubParallelism));
-        return new DubEstimate(itemId, video.Name, Label(stream), segments.Count, chars, seconds / 60, cost, minutes, File.Exists(OutputPath(video, language)), requests, config.GeminiTtsRequestsPerDay);
+        int perDay = tts.RequestsPerDay(config);
+        return new DubEstimate(
+            itemId,
+            video.Name,
+            Label(stream),
+            segments.Count,
+            segments.Sum(s => s.Text.Length),
+            seconds / 60,
+            cost,
+            minutes,
+            File.Exists(OutputPath(video, language)),
+            requests,
+            perDay,
+            perDay > 0 ? Quota.UsedToday(QuotaKey(tts, config), DateTime.UtcNow) : 0,
+            perDay > 0 ? QuotaTracker.NextResetUtc(DateTime.UtcNow) : null,
+            tts.DisplayName(config),
+            voice);
     }
 
-    /// <summary>Starts a voice-over in the background (one per item).</summary>
-    public bool Start(Guid itemId, string language, string? voice)
+    /// <summary>Starts a voice-over in the background (one per item). Returns null when started, else why not.</summary>
+    public string? Start(Guid itemId, string language, string? providerId, string? voice)
     {
+        var config = Config;
+        var tts = GetProvider(providerId);
+        voice = GetVoice(tts, voice);
         var video = GetVideo(itemId);
         if (_running.ContainsKey(itemId))
         {
-            return false;
+            return "Вече тече озвучаване на този филм.";
+        }
+
+        int perDay = tts.RequestsPerDay(config);
+        if (perDay > 0 && Quota.UsedToday(QuotaKey(tts, config), DateTime.UtcNow) >= perDay)
+        {
+            return $"Дневният лимит от {perDay} заявки за {tts.DisplayName(config)} е изчерпан. Нулира се в {QuotaTracker.NextResetUtc(DateTime.UtcNow).ToLocalTime():HH:mm}.";
         }
 
         _status[itemId] = new JobStatus(video.Name, language, "voice-over", "стартиране", DateTime.UtcNow);
@@ -126,7 +185,7 @@ public sealed class DubService
         {
             try
             {
-                await RunAsync(video, language, string.IsNullOrWhiteSpace(voice) ? Config.DubVoice : voice!).ConfigureAwait(false);
+                await RunAsync(video, language, tts, voice).ConfigureAwait(false);
                 _status.TryRemove(itemId, out _);
             }
             catch (Exception ex)
@@ -140,24 +199,22 @@ public sealed class DubService
                 _running.TryRemove(itemId, out _);
             }
         });
-        return true;
+        return null;
     }
 
     internal static string OutputPath(Video video, string language) =>
         Path.Combine(Path.GetDirectoryName(video.Path)!, Path.GetFileNameWithoutExtension(video.Path) + "." + language + ".mka");
 
-    private async Task RunAsync(Video video, string language, string voice)
+    private async Task RunAsync(Video video, string language, ITtsProvider tts, string voice)
     {
         var config = Config;
         var started = DateTime.UtcNow;
-        string label = $"{_tts.DisplayName(config)} · {voice}";
+        string label = $"{tts.DisplayName(config)} · {voice}";
         void Stage(string s) => _status[video.Id] = new JobStatus(video.Name, language, label, s, started);
 
         var stream = FindSubtitle(video, language) ?? throw new InvalidOperationException("Няма текстови субтитри на " + language);
         Stage("четене на субтитрите");
         var segments = DubPlanner.Plan(await ReadSubtitleAsync(video, stream, CancellationToken.None).ConfigureAwait(false), config.DubSkipSongs);
-        int chars = segments.Sum(s => s.Text.Length);
-        CheckBudget(config, _tts.Estimate(chars, chars / DubPlanner.CharactersPerSecond, config) * (1 - CachedShare(video, segments)), video.Name);
 
         // 1) Speech for every segment (cached on disk per line, so an interrupted run resumes for free).
         //    Several lines go into one request (TTS quotas count requests) and are split again at the pauses.
@@ -167,7 +224,7 @@ public sealed class DubService
         var missing = new List<int>();
         for (int i = 0; i < segments.Count; i++)
         {
-            string cache = ClipPath(video, voice, config, segments[i].Text);
+            string cache = ClipPath(video, tts, voice, config, segments[i].Text);
             if (File.Exists(cache))
             {
                 (clips[i], rate) = Wav.ReadPcm16Mono(await File.ReadAllBytesAsync(cache).ConfigureAwait(false));
@@ -179,6 +236,21 @@ public sealed class DubService
         }
 
         var batches = Batches(missing, segments, config);
+        CheckBudget(config, tts.Estimate(missing.Sum(i => segments[i].Text.Length), missing.Sum(i => segments[i].Text.Length) / DubPlanner.CharactersPerSecond, config), video.Name);
+
+        int perDay = tts.RequestsPerDay(config);
+        string quotaKey = QuotaKey(tts, config);
+        int remaining = perDay > 0 ? perDay - Quota.UsedToday(quotaKey, DateTime.UtcNow) : int.MaxValue;
+        if (batches.Count > remaining)
+        {
+            _logger.LogWarning(
+                "AI Translate: voice-over {Title} needs {Requests} requests, {Remaining} left today for {Model}; it will stop there and continue on the next run",
+                video.Name,
+                batches.Count,
+                remaining,
+                quotaKey);
+        }
+
         int done = segments.Count - missing.Count;
         try
         {
@@ -188,21 +260,29 @@ public sealed class DubService
                 new ParallelOptions { MaxDegreeOfParallelism = Math.Clamp(config.DubParallelism, 1, 8) },
                 async (batch, ct) =>
                 {
-                    string text = string.Join(config.DubLineSeparator, batch.Select(i => segments[i].Text));
-                    var clip = await _tts.SynthesizeAsync(text, voice, config.DubStyle, config, ct).ConfigureAwait(false);
+                    string text = string.Join(tts.LineSeparator(config), batch.Select(i => segments[i].Text));
+                    var clip = await tts.SynthesizeAsync(text, voice, config.DubStyle, config, ct).ConfigureAwait(false);
+                    Quota.Add(quotaKey, 1, DateTime.UtcNow);
                     usage.Add(clip.Usage);
                     rate = clip.SampleRate;
                     var pieces = ClipSplitter.Split(clip.Samples, clip.SampleRate, batch.Select(i => segments[i].Text.Length).ToList());
                     for (int k = 0; k < batch.Count; k++)
                     {
                         clips[batch[k]] = pieces[k];
-                        string cache = ClipPath(video, voice, config, segments[batch[k]].Text);
+                        string cache = ClipPath(video, tts, voice, config, segments[batch[k]].Text);
                         Directory.CreateDirectory(Path.GetDirectoryName(cache)!);
                         await File.WriteAllBytesAsync(cache, Wav.WritePcm16Mono(pieces[k], clip.SampleRate), ct).ConfigureAwait(false);
                     }
 
                     Stage($"синтез на глас {Interlocked.Add(ref done, batch.Count)}/{segments.Count}");
                 }).ConfigureAwait(false);
+        }
+        catch (DailyQuotaException)
+        {
+            Quota.MarkExhausted(quotaKey, perDay, DateTime.UtcNow);
+            throw new InvalidOperationException(
+                $"Дневният лимит на {tts.DisplayName(config)} е изчерпан при {done}/{segments.Count} реплики. " +
+                $"Готовото е запазено — пусни „Озвучи“ отново след {QuotaTracker.NextResetUtc(DateTime.UtcNow).ToLocalTime():HH:mm} и ще продължи оттук (или избери друг доставчик/модел).");
         }
         finally
         {
@@ -374,19 +454,9 @@ public sealed class DubService
     private Video GetVideo(Guid itemId) =>
         _libraryManager.GetItemById(itemId) as Video ?? throw new InvalidOperationException("Item not found: " + itemId);
 
-    private double CachedShare(Video video, IReadOnlyList<DubSegment> segments)
-    {
-        if (segments.Count == 0)
-        {
-            return 0;
-        }
-
-        var config = Config;
-        return segments.Count(s => File.Exists(ClipPath(video, config.DubVoice, config, s.Text))) / (double)segments.Count;
-    }
-
-    private string ClipPath(Video video, string voice, PluginConfiguration config, string text) =>
-        Path.Combine(DataFolder, "dub", SubtitleJobService.Hash(video.Path), $"{voice}-{SubtitleJobService.Hash(config.GeminiTtsModel + "|" + config.DubStyle + "|" + text)}.wav");
+    // Model names differ between providers, so model + style + text identifies a clip (existing Gemini caches stay valid).
+    private string ClipPath(Video video, ITtsProvider tts, string voice, PluginConfiguration config, string text) =>
+        Path.Combine(DataFolder, "dub", SubtitleJobService.Hash(video.Path), $"{voice}-{SubtitleJobService.Hash(tts.Model(config) + "|" + config.DubStyle + "|" + text)}.wav");
 
     private void CheckBudget(PluginConfiguration config, double estimate, string title)
     {

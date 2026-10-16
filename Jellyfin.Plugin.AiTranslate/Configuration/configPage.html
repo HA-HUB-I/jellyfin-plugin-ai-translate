@@ -74,6 +74,11 @@
                     <h3>Дублаж (AI войсоувър)</h3>
                     <div class="fieldDescription">Озвучава филм от българските му субтитри: оригиналният звук остава отдолу (по-тих, докато говори дикторът). Резултатът е отделна аудиопътечка „<b>Български (AI войсоувър)</b>“ до филма — видеото не се пипа. Пуска се само ръчно.</div>
                     <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="DubProvider">Доставчик на глас</label>
+                        <select id="DubProvider" is="emby-select" class="emby-select-withcolor emby-select"></select>
+                        <div class="fieldDescription" id="dubQuota"></div>
+                    </div>
+                    <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="DubVoice">Глас</label>
                         <select id="DubVoice" is="emby-select" class="emby-select-withcolor emby-select"></select>
                     </div>
@@ -91,7 +96,10 @@
 
                     <details>
                         <summary>Models and prices</summary>
-                        <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="GeminiTtsModel">Gemini voice model</label><input id="GeminiTtsModel" type="text" is="emby-input" /></div>
+                        <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="GeminiTtsModel">Gemini voice model</label><input id="GeminiTtsModel" type="text" is="emby-input" /><div class="fieldDescription"><code>gemini-3.8-flash-tts</code> or the cheaper <code>gemini-3.8-flash-lite-tts</code> (each has its own daily quota).</div></div>
+                        <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="OpenAiTtsModel">OpenAI voice model</label><input id="OpenAiTtsModel" type="text" is="emby-input" /></div>
+                        <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="OpenAiTtsRequestsPerMinute">OpenAI voice requests per minute</label><input id="OpenAiTtsRequestsPerMinute" type="number" step="10" min="1" is="emby-input" /></div>
+                        <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="PriceOpenAiTtsPerMinute">OpenAI voice, USD per minute of speech (estimate)</label><input id="PriceOpenAiTtsPerMinute" type="number" step="0.001" is="emby-input" /></div>
                         <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="DubMaxTempo">Max speed-up to fit a line (1.0–1.5)</label><input id="DubMaxTempo" type="number" step="0.05" min="1" max="1.5" is="emby-input" /></div>
                         <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="DubParallelism">Lines synthesized in parallel</label><input id="DubParallelism" type="number" step="1" min="1" max="8" is="emby-input" /></div>
                         <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="GeminiTtsRequestsPerMinute">Gemini voice requests per minute (your tier's limit)</label><input id="GeminiTtsRequestsPerMinute" type="number" step="1" min="1" is="emby-input" /><div class="fieldDescription">Tier 1: 10 — a 100-minute film (~650 lines) takes about an hour. Raise it when Google raises your tier.</div></div>
@@ -129,8 +137,8 @@
             (function () {
                 var pluginId = '4cad7295-fa8b-46c9-a2e0-b6e5abe8a234';
                 var checks = ['EnableOpenAiTranscription', 'EnableGeminiTranscription', 'EnableOpenAiTranslation', 'EnableGeminiTranslation', 'OnlyWhenNoOtherSubtitles', 'PreferExistingSubtitles', 'UseOtherProvidersAsSource', 'StripHearingImpaired', 'DubSkipSongs'];
-                var texts = ['OpenAiApiKey', 'GeminiApiKey', 'TargetLanguages', 'SourceLanguages','TranslationInstructions', 'OpenAiTranscribeModel', 'OpenAiTextModel', 'GeminiTranscribeModel', 'GeminiTextModel', 'GeminiThinkingLevel', 'OpenAiReasoningEffort', 'GeminiTtsModel', 'DubVoice', 'DubStyle'];
-                var numbers = ['MonthlyBudgetUsd', 'GeminiAudioTokensPerMinute', 'DubMaxTempo', 'DubParallelism', 'GeminiTtsRequestsPerMinute', 'GeminiTtsRequestsPerDay', 'DubLinesPerRequest','PriceGeminiTtsInputPerMTok', 'PriceGeminiTtsAudioPerMTok', 'PriceOpenAiTranscribePerMinute', 'PriceGeminiTranscribePerMinute', 'PriceOpenAiTextInputPerMTok', 'PriceOpenAiTextOutputPerMTok', 'PriceGeminiTextInputPerMTok', 'PriceGeminiTextOutputPerMTok'];
+                var texts = ['OpenAiApiKey', 'GeminiApiKey', 'TargetLanguages', 'SourceLanguages','TranslationInstructions', 'OpenAiTranscribeModel', 'OpenAiTextModel', 'GeminiTranscribeModel', 'GeminiTextModel', 'GeminiThinkingLevel', 'OpenAiReasoningEffort', 'GeminiTtsModel', 'OpenAiTtsModel', 'DubProvider', 'DubVoice', 'DubStyle'];
+                var numbers = ['MonthlyBudgetUsd', 'GeminiAudioTokensPerMinute', 'DubMaxTempo', 'DubParallelism', 'GeminiTtsRequestsPerMinute', 'GeminiTtsRequestsPerDay', 'DubLinesPerRequest', 'OpenAiTtsRequestsPerMinute', 'PriceOpenAiTtsPerMinute', 'PriceGeminiTtsInputPerMTok', 'PriceGeminiTtsAudioPerMTok', 'PriceOpenAiTranscribePerMinute', 'PriceGeminiTranscribePerMinute', 'PriceOpenAiTextInputPerMTok', 'PriceOpenAiTextOutputPerMTok', 'PriceGeminiTextInputPerMTok', 'PriceGeminiTextOutputPerMTok'];
                 var page = document.querySelector('#AiTranslateConfigPage');
 
                 function esc(s) { var d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
@@ -167,37 +175,58 @@
                     });
                 }
 
+                var providers = [];
+
+                function fillVoices() {
+                    var p = providers.filter(function (x) { return x.Id === page.querySelector('#DubProvider').value; })[0];
+                    var sel = page.querySelector('#DubVoice');
+                    var current = sel.value || sel.getAttribute('data-saved');
+                    sel.innerHTML = p ? p.Voices.map(function (v) { return '<option value="' + esc(v.Id) + '">' + esc(v.Id) + ' — ' + esc(v.Description) + '</option>'; }).join('') : '';
+                    if (p && p.Voices.some(function (v) { return v.Id.toLowerCase() === String(current || '').toLowerCase(); })) { sel.value = p.Voices.filter(function (v) { return v.Id.toLowerCase() === String(current).toLowerCase(); })[0].Id; }
+                    page.querySelector('#dubQuota').innerHTML = !p ? 'Въведи API ключ за Gemini или OpenAI.' :
+                        p.RequestsPerDay ? ('Днес: <b>' + p.UsedToday + ' / ' + p.RequestsPerDay + '</b> заявки (нулира се в 03:00). ~10 реплики на заявка → ~1 филм на ден.') : 'Без дневен лимит.';
+                }
+
                 function dubEstimate(id) {
                     var info = page.querySelector('.dubInfo[data-id="' + id + '"]');
+                    var provider = page.querySelector('#DubProvider').value, voice = page.querySelector('#DubVoice').value;
                     info.textContent = 'изчисляване…';
-                    api('GET', 'AiTranslate/Dub/Estimate?language=bg&itemId=' + id).then(function (e) {
-                        info.innerHTML = e.Segments + ' реплики, ~' + e.SpeechMinutes.toFixed(0) + ' мин говор · <b>≈ $' + e.CostUsd.toFixed(2) + '</b> · ~' + Math.ceil(e.Minutes) + ' мин' +
-                            ' · ' + e.Requests + ' заявки' + (e.RequestsPerDay && e.Requests > e.RequestsPerDay ? ' <b style="color:#e57373">— над дневния лимит ' + e.RequestsPerDay + ', ще спре и продължи утре</b>' : '') +
+                    api('GET', 'AiTranslate/Dub/Estimate?language=bg&itemId=' + id + '&provider=' + encodeURIComponent(provider) + '&voice=' + encodeURIComponent(voice)).then(function (e) {
+                        var left = e.RequestsPerDay ? e.RequestsPerDay - e.UsedToday : null;
+                        var warn = left !== null && e.Requests > left
+                            ? ' <b style="color:#e57373">⚠ ' + e.Requests + ' заявки, а днес остават ' + Math.max(0, left) + ' от ' + e.RequestsPerDay + ' — ще спре там, готовото се пази; пусни пак след ' + new Date(e.QuotaResetUtc).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + '.</b>'
+                            : ' · ' + e.Requests + ' заявки' + (left !== null ? ' (днес остават ' + left + ')' : '');
+                        info.innerHTML = e.Segments + ' реплики, ~' + e.SpeechMinutes.toFixed(0) + ' мин говор · <b>≈ $' + e.CostUsd.toFixed(2) + '</b> · ~' + Math.ceil(e.Minutes) + ' мин' + warn +
                             (e.Exists ? ' (ще замени съществуващия)' : '') +
-                            ' <button is="emby-button" type="button" class="raised button-submit emby-button dubGo"><span>Озвучи с ' + esc(page.querySelector('#DubVoice').value) + '</span></button>';
+                            ' <button is="emby-button" type="button" class="raised button-submit emby-button dubGo"><span>Озвучи · ' + esc(e.Provider) + ' · ' + esc(e.Voice) + '</span></button>';
                         info.querySelector('.dubGo').addEventListener('click', function () {
-                            var voice = page.querySelector('#DubVoice').value;
-                            api('POST', 'AiTranslate/Dub/Start?language=bg&itemId=' + id + '&voice=' + encodeURIComponent(voice)).then(function () {
+                            api('POST', 'AiTranslate/Dub/Start?language=bg&itemId=' + id + '&provider=' + encodeURIComponent(provider) + '&voice=' + encodeURIComponent(e.Voice)).then(function () {
                                 info.innerHTML = '⏳ стартирано — виж „This month“ горе';
                                 loadStatus();
-                            }, function () { info.textContent = 'вече тече'; });
+                            }, function (r) {
+                                (r && r.text ? r.text() : Promise.resolve('не стартира')).then(function (t) { info.innerHTML = '<b style="color:#e57373">' + esc(t) + '</b>'; });
+                            });
                         });
                     }, function () { info.textContent = 'грешка при изчисляването'; });
                 }
 
+                page.querySelector('#DubProvider').addEventListener('change', fillVoices);
                 page.querySelector('#dubSearchBtn').addEventListener('click', dubSearch);
                 page.querySelector('#dubSearch').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); dubSearch(); } });
 
                 var timer = null;
                 page.addEventListener('pageshow', function () {
                     Dashboard.showLoadingMsg();
-                    api('GET', 'AiTranslate/Dub/Voices').then(function (voices) {
-                        var sel = page.querySelector('#DubVoice');
-                        sel.innerHTML = voices.map(function (v) { return '<option value="' + esc(v.Id) + '">' + esc(v.Id) + ' — ' + esc(v.Description) + '</option>'; }).join('');
+                    api('GET', 'AiTranslate/Dub/Providers').then(function (list) {
+                        providers = list;
+                        page.querySelector('#DubProvider').innerHTML = list.map(function (p) { return '<option value="' + esc(p.Id) + '">' + esc(p.Name) + '</option>'; }).join('');
                         return ApiClient.getPluginConfiguration(pluginId);
                     }).then(function (config) {
                         checks.forEach(function (k) { page.querySelector('#' + k).checked = config[k]; });
-                        texts.concat(numbers).forEach(function (k) { page.querySelector('#' + k).value = config[k] == null ? '' : config[k]; });
+                        texts.concat(numbers).forEach(function (k) { if (k !== 'DubVoice') { page.querySelector('#' + k).value = config[k] == null ? '' : config[k]; } });
+                        page.querySelector('#DubVoice').setAttribute('data-saved', config.DubVoice || '');
+                        if (!providers.some(function (p) { return p.Id === config.DubProvider; }) && providers.length) { page.querySelector('#DubProvider').value = providers[0].Id; }
+                        fillVoices();
                         Dashboard.hideLoadingMsg();
                     });
                     loadStatus();
