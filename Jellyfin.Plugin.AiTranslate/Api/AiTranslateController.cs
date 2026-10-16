@@ -16,11 +16,23 @@ public sealed class AiTranslateController : ControllerBase
 {
     private readonly SubtitleJobService _jobs;
     private readonly DubService _dub;
+    private readonly Providers.ModelCatalog _models;
 
-    public AiTranslateController(SubtitleJobService jobs, DubService dub)
+    public AiTranslateController(SubtitleJobService jobs, DubService dub, Providers.ModelCatalog models)
     {
         _jobs = jobs;
         _dub = dub;
+        _models = models;
+    }
+
+    /// <summary>Current models of both providers, grouped by use (for the model drop-downs).</summary>
+    [HttpGet("Models")]
+    public async Task<ActionResult<object>> GetModels(CancellationToken cancellationToken)
+    {
+        var config = Plugin.Instance?.Configuration ?? new Configuration.PluginConfiguration();
+        var gemini = _models.GetAsync("gemini", config, cancellationToken);
+        var openai = _models.GetAsync("openai", config, cancellationToken);
+        return Ok(new { Gemini = await gemini.ConfigureAwait(false), OpenAi = await openai.ConfigureAwait(false) });
     }
 
     [HttpGet("Status")]
