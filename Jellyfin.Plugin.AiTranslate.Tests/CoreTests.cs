@@ -169,6 +169,37 @@ public class TranslationTests
     }
 }
 
+public class RateLimitTests
+{
+    private const string Gemini429 = "Gemini 429: {\"error\":{\"message\":\"Rate limit exceeded for model gemini-3.5-transcribe (limit: 10000 input tokens per minute on Tier 1). Please retry in 19s or upgrade your tier\"}}";
+
+    [Fact]
+    public void UsesRetryHint()
+    {
+        Assert.True(RateLimit.IsRetryable(Gemini429));
+        Assert.Equal(TimeSpan.FromSeconds(20), RateLimit.RetryDelay(Gemini429, 1));
+        Assert.Equal(TimeSpan.FromSeconds(2.5), RateLimit.RetryDelay("OpenAI 429: Please try again in 1.5s.", 1));
+    }
+
+    [Fact]
+    public void BacksOffWithoutHintAndIgnoresOtherErrors()
+    {
+        Assert.Equal(TimeSpan.FromSeconds(40), RateLimit.RetryDelay("Gemini 503: overloaded", 2));
+        Assert.False(RateLimit.IsRetryable("Gemini 400: bad request"));
+    }
+
+    [Fact]
+    public void GeminiChunksFollowTheTierLimit()
+    {
+        var gemini = new GeminiProvider(null!);
+        Assert.Equal(TimeSpan.FromSeconds(360), gemini.ChunkLength(new Configuration.PluginConfiguration { GeminiAudioTokensPerMinute = 10000 }));
+        Assert.Equal(TimeSpan.FromMinutes(25), gemini.ChunkLength(new Configuration.PluginConfiguration { GeminiAudioTokensPerMinute = 1_000_000 }));
+
+        // 100 minutes = 150 000 tokens = 15 minutes at Tier 1, plus overhead.
+        Assert.Equal(TimeSpan.FromMinutes(17), gemini.EstimatedTime(TimeSpan.FromMinutes(100), new Configuration.PluginConfiguration()));
+    }
+}
+
 public class MiscTests
 {
     [Theory]

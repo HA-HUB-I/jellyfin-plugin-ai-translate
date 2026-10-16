@@ -85,7 +85,7 @@ public sealed class Translation
                 }
             }).ConfigureAwait(false);
 
-        var cues = source.Select((c, i) => c with { Text = CueTools.Wrap(results[i]) }).ToList();
+        var cues = source.Select((c, i) => c with { Text = results[i] }).ToList();
         return (cues, usage);
     }
 
@@ -102,7 +102,8 @@ public sealed class Translation
             - Keep it short enough to read: aim for at most 84 characters per line.
             - Use "context_before" and the neighbouring lines only to understand meaning; do not translate them separately.
             - Keep names, places and brands; transliterate names into the {{target}} alphabet when that is the convention.
-            - Keep song markers ♪ and dialogue dashes "-". If a line is already in {{target}}, return it unchanged.
+            - Keep song markers ♪ and dialogue dashes "-". When a line has two speakers on separate lines ("...\n- ..."), keep that line break ("\n") so each speaker stays on its own line.
+            - If a line is already in {{target}}, return it unchanged.
             - Output only the JSON.
             {{extra}}
             """;
@@ -199,7 +200,23 @@ public sealed class Translation
         },
     };
 
-    private static string Flatten(string text) => text.Replace('\n', ' ');
+    /// <summary>Joins wrapped lines but keeps the break before a second speaker ("\n- ").</summary>
+    internal static string Flatten(string text)
+    {
+        var lines = text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var sb = new System.Text.StringBuilder();
+        for (int i = 0; i < lines.Length; i++)
+        {
+            if (i > 0)
+            {
+                sb.Append(lines[i].StartsWith('-') ? '\n' : ' ');
+            }
+
+            sb.Append(lines[i]);
+        }
+
+        return sb.ToString();
+    }
 
     private static string StripFence(string s)
     {

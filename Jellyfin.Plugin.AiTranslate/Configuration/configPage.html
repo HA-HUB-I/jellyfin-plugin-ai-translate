@@ -34,6 +34,27 @@
                     <div class="checkboxContainer"><label class="emby-checkbox-label"><input id="EnableOpenAiTranslation" type="checkbox" is="emby-checkbox" /><span>Translation: OpenAI</span></label></div>
                     <div class="checkboxContainer"><label class="emby-checkbox-label"><input id="EnableGeminiTranslation" type="checkbox" is="emby-checkbox" /><span>Translation: Google Gemini</span></label></div>
 
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label"><input id="OnlyWhenNoOtherSubtitles" type="checkbox" is="emby-checkbox" /><span>Offer AI generation only when no other subtitles exist</span></label>
+                        <div class="fieldDescription checkboxFieldDescription">Hidden when the film already has subtitles in that language or another subtitle provider found some. Finished AI subtitles are always listed.</div>
+                    </div>
+
+                    <h3>Translate existing subtitles (fast, cheap)</h3>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label"><input id="PreferExistingSubtitles" type="checkbox" is="emby-checkbox" /><span>When a text subtitle in another language exists, offer only its translation (hide the slow audio option)</span></label>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="SourceLanguages">Preferred source languages</label>
+                        <input id="SourceLanguages" type="text" is="emby-input" />
+                        <div class="fieldDescription">Best first, e.g. <code>en</code> or <code>en,de,ru</code>. Embedded and external text subtitles are used first; image subtitles (DVD/Blu-ray) are not.</div>
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label"><input id="UseOtherProvidersAsSource" type="checkbox" is="emby-checkbox" /><span>If the film has none, take a source subtitle from the other subtitle providers</span></label>
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label"><input id="StripHearingImpaired" type="checkbox" is="emby-checkbox" /><span>Remove hearing-impaired notes ([music], (sighs), JOHN:) before translating</span></label>
+                    </div>
+
                     <h3>Languages and limits</h3>
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="TargetLanguages">Subtitle languages</label>
@@ -56,6 +77,13 @@
                         <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="OpenAiTextModel">OpenAI translation model</label><input id="OpenAiTextModel" type="text" is="emby-input" /></div>
                         <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="GeminiTranscribeModel">Gemini speech model</label><input id="GeminiTranscribeModel" type="text" is="emby-input" /></div>
                         <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="GeminiTextModel">Gemini translation model</label><input id="GeminiTextModel" type="text" is="emby-input" /></div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="GeminiAudioTokensPerMinute">Gemini Transcribe tokens per minute (your tier's limit)</label>
+                            <input id="GeminiAudioTokensPerMinute" type="number" step="1000" min="1000" is="emby-input" />
+                            <div class="fieldDescription">Tier 1: 10000 (≈ 6.5 min of audio per minute). Audio costs 25 tokens/s; this sets chunk size and pacing. Raise it when Google raises your tier.</div>
+                        </div>
+                        <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="GeminiThinkingLevel">Gemini thinking level for translation</label><input id="GeminiThinkingLevel" type="text" is="emby-input" /><div class="fieldDescription"><code>low</code> (recommended: about 3× fewer billed tokens, same result), <code>medium</code>, <code>high</code>, or empty for the model default.</div></div>
+                        <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="OpenAiReasoningEffort">OpenAI reasoning effort for translation</label><input id="OpenAiReasoningEffort" type="text" is="emby-input" /><div class="fieldDescription"><code>low</code>, <code>medium</code>, <code>high</code>, or empty. Ignored automatically by models that don't reason.</div></div>
                         <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="PriceOpenAiTranscribePerMinute">OpenAI speech, USD / minute</label><input id="PriceOpenAiTranscribePerMinute" type="number" step="0.0001" is="emby-input" /></div>
                         <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="PriceGeminiTranscribePerMinute">Gemini speech, USD / minute</label><input id="PriceGeminiTranscribePerMinute" type="number" step="0.0001" is="emby-input" /></div>
                         <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="PriceOpenAiTextInputPerMTok">OpenAI text input, USD / 1M tokens</label><input id="PriceOpenAiTextInputPerMTok" type="number" step="0.01" is="emby-input" /></div>
@@ -74,9 +102,9 @@
         <script type="text/javascript">
             (function () {
                 var pluginId = '4cad7295-fa8b-46c9-a2e0-b6e5abe8a234';
-                var checks = ['EnableOpenAiTranscription', 'EnableGeminiTranscription', 'EnableOpenAiTranslation', 'EnableGeminiTranslation'];
-                var texts = ['OpenAiApiKey', 'GeminiApiKey', 'TargetLanguages', 'TranslationInstructions', 'OpenAiTranscribeModel', 'OpenAiTextModel', 'GeminiTranscribeModel', 'GeminiTextModel'];
-                var numbers = ['MonthlyBudgetUsd', 'PriceOpenAiTranscribePerMinute', 'PriceGeminiTranscribePerMinute', 'PriceOpenAiTextInputPerMTok', 'PriceOpenAiTextOutputPerMTok', 'PriceGeminiTextInputPerMTok', 'PriceGeminiTextOutputPerMTok'];
+                var checks = ['EnableOpenAiTranscription', 'EnableGeminiTranscription', 'EnableOpenAiTranslation', 'EnableGeminiTranslation', 'OnlyWhenNoOtherSubtitles', 'PreferExistingSubtitles', 'UseOtherProvidersAsSource', 'StripHearingImpaired'];
+                var texts = ['OpenAiApiKey', 'GeminiApiKey', 'TargetLanguages', 'SourceLanguages','TranslationInstructions', 'OpenAiTranscribeModel', 'OpenAiTextModel', 'GeminiTranscribeModel', 'GeminiTextModel', 'GeminiThinkingLevel', 'OpenAiReasoningEffort'];
+                var numbers = ['MonthlyBudgetUsd', 'GeminiAudioTokensPerMinute','PriceOpenAiTranscribePerMinute', 'PriceGeminiTranscribePerMinute', 'PriceOpenAiTextInputPerMTok', 'PriceOpenAiTextOutputPerMTok', 'PriceGeminiTextInputPerMTok', 'PriceGeminiTextOutputPerMTok'];
                 var page = document.querySelector('#AiTranslateConfigPage');
 
                 function esc(s) { var d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }

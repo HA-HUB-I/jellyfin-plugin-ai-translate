@@ -15,7 +15,21 @@ AI · Google Gemini gemini-3.5-transcribe + Google Gemini gemini-3.8-flash · �
 Nothing is charged until you pick one. Automatic subtitle downloads (library scans) **never** start a paid
 job — they only get results that already exist.
 
-## How it works
+## Two ways to get subtitles
+
+**1. Translate an existing subtitle (fast, cheap — preferred).** If the film has a text subtitle in another
+language — embedded (MKV/MP4), an external `.srt/.ass/.vtt`, or a result of another Jellyfin subtitle provider
+(OpenSubtitles, Subbuzz, …) — its lines are translated with their original timings. Measured: 2250 lines in
+88 s for $0.19 (Gemini 3.8 Flash). Hearing-impaired notes (`[music]`, `(sighs)`, `JOHN:`) are removed first,
+dialogue keeps one speaker per line. Image subtitles (DVD/Blu-ray) are not used.
+
+**2. Generate from the audio track (slow).** Only offered when no text subtitle exists (configurable).
+Measured on a 98-minute film: $0.74 and ~20 minutes with Gemini on Tier 1 rate limits.
+
+By default AI options appear only when the film has no subtitles in that language and the other providers
+found none. Finished AI subtitles are always listed (free).
+
+## How the audio path works
 
 1. **Audio**: Jellyfin's ffmpeg extracts the default audio track as mono 16 kHz MP3 chunks (any container
    Jellyfin plays: MKV, MP4, AVI, TS, M2TS, …).
@@ -33,12 +47,17 @@ If the client gives up waiting, the job keeps running; search again and pick **�
 
 ## Costs
 
-Estimates per 100-minute film (October 2026 list prices, editable in the settings):
+Measured (October 2026 list prices, editable in the settings):
 
-| Step | OpenAI | Google |
-|---|---|---|
-| Speech → text | whisper-1 ≈ $0.60 | Gemini Transcribe ≈ $0.50 |
-| Translation | gpt-6.1-sol ≈ $0.45 | gemini-3.8-flash ≈ $0.18 |
+| Job | Result |
+|---|---|
+| Translate 2250 English lines → Bulgarian, Gemini 3.8 Flash, thinking `low` | **$0.19**, 88 s |
+| Same with the model's default thinking | $0.59, 274 s |
+| Audio 98 min → Bulgarian, Gemini Transcribe + Gemini 3.8 Flash | **$0.74**, ~20 min (Tier 1) |
+
+Gemini Transcribe on Tier 1 is limited to 10 000 audio tokens per minute (≈ 6.5 min of audio per minute);
+the plugin sizes chunks and paces requests to that limit (configurable when your tier is higher).
+Translation uses a low thinking/reasoning level by default: about a third of the billed tokens, same result.
 
 The settings page shows this month's spend per provider/model (audio minutes, tokens) and a **monthly
 limit**; a job that would exceed it is refused. The provider's invoice is what counts — the plugin's numbers

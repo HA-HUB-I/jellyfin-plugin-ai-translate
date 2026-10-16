@@ -21,6 +21,7 @@ public sealed class OpenAiProvider : ITranscriber, ITranslator
 {
     private const string BaseUrl = "https://api.openai.com/v1/";
     private readonly IHttpClientFactory _httpClientFactory;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> _reasoningUnsupported = new(StringComparer.Ordinal);
 
     public OpenAiProvider(IHttpClientFactory httpClientFactory)
     {
@@ -29,8 +30,12 @@ public sealed class OpenAiProvider : ITranscriber, ITranslator
 
     public string Id => "openai";
 
-    // whisper-1 accepts 25 MB; 20 minutes of 32 kbit/s MP3 is about 4.6 MB.
-    public TimeSpan ChunkLength => TimeSpan.FromMinutes(20);
+    public int Parallelism => 2;
+
+    // whisper-1 accepts 25 MB; 20 minutes of 32 kbit/s MP3 is about 4.8 MB.
+    public TimeSpan ChunkLength(PluginConfiguration config) => TimeSpan.FromMinutes(20);
+
+    public TimeSpan EstimatedTime(TimeSpan duration, PluginConfiguration config) => TimeSpan.FromMinutes(3 + (duration.TotalMinutes / 15));
 
     public string DisplayName(PluginConfiguration config) => "OpenAI";
 
@@ -40,7 +45,13 @@ public sealed class OpenAiProvider : ITranscriber, ITranslator
 
     public (double Input, double Output) PricePerMTok(PluginConfiguration config) => (config.PriceOpenAiTextInputPerMTok, config.PriceOpenAiTextOutputPerMTok);
 
-    public async Task<Transcription> TranscribeAsync(AudioChunk chunk, PluginConfiguration config, CancellationToken cancellationToken)
+    public Task<Transcription> TranscribeAsync(AudioChunk chunk, PluginConfiguration config, CancellationToken cancellationToken) =>
+        RateLimit.RetryAsync(() => TranscribeOnceAsync(chunk, config, cancellationToken), cancellationToken);
+
+    public Task<(string Json, Usage Usage)> CompleteJsonAsync(string systemPrompt, string userJson, PluginConfiguration config, CancellationToken cancellationToken) =>
+        RateLimit.RetryAsync(() => CompleteJsonOnceAsync(systemPrompt, userJson, config, cancellationToken), cancellationToken);
+
+    private async Task<Transcription> TranscribeOnceAsync(AudioChunk chunk, PluginConfiguration config, CancellationToken cancellationToken)
     {
         using var form = new MultipartFormDataContent();
         var file = new ByteArrayContent(await File.ReadAllBytesAsync(chunk.Path, cancellationToken).ConfigureAwait(false));
@@ -57,20 +68,42 @@ public sealed class OpenAiProvider : ITranscriber, ITranslator
         return new Transcription(cues, language, new Usage(Id, config.OpenAiTranscribeModel, minutes, 0, 0, minutes * config.PriceOpenAiTranscribePerMinute));
     }
 
-    public async Task<(string Json, Usage Usage)> CompleteJsonAsync(string systemPrompt, string userJson, PluginConfiguration config, CancellationToken cancellationToken)
+    private async Task<(string Json, Usage Usage)> CompleteJsonOnceAsync(string systemPrompt, string userJson, PluginConfiguration config, CancellationToken cancellationToken)
     {
-        var payload = new JsonObject
+        HttpRequestMessage Request(bool withReasoning)
         {
-            ["model"] = config.OpenAiTextModel,
-            ["instructions"] = systemPrompt,
-            ["input"] = userJson,
-            ["text"] = new JsonObject { ["format"] = Translation.OpenAiJsonSchemaFormat() },
-        };
-        using var request = new HttpRequestMessage(HttpMethod.Post, BaseUrl + "responses")
+            var payload = new JsonObject
+            {
+                ["model"] = config.OpenAiTextModel,
+                ["instructions"] = systemPrompt,
+                ["input"] = userJson,
+                ["text"] = new JsonObject { ["format"] = Translation.OpenAiJsonSchemaFormat() },
+            };
+            if (withReasoning)
+            {
+                payload["reasoning"] = new JsonObject { ["effort"] = config.OpenAiReasoningEffort.Trim() };
+            }
+
+            return new HttpRequestMessage(HttpMethod.Post, BaseUrl + "responses")
+            {
+                Content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json"),
+            };
+        }
+
+        bool reasoning = !string.IsNullOrWhiteSpace(config.OpenAiReasoningEffort) && !_reasoningUnsupported.ContainsKey(config.OpenAiTextModel);
+        string body;
+        try
         {
-            Content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json"),
-        };
-        var body = await SendAsync(request, config, cancellationToken).ConfigureAwait(false);
+            using var request = Request(reasoning);
+            body = await SendAsync(request, config, cancellationToken).ConfigureAwait(false);
+        }
+        catch (HttpRequestException ex) when (reasoning && ex.Message.Contains(" 400:", StringComparison.Ordinal) && ex.Message.Contains("reasoning", StringComparison.OrdinalIgnoreCase))
+        {
+            // Not a reasoning model (or that effort is not allowed): remember and use the model default.
+            _reasoningUnsupported[config.OpenAiTextModel] = true;
+            using var request = Request(false);
+            body = await SendAsync(request, config, cancellationToken).ConfigureAwait(false);
+        }
         var (text, input, output) = ParseResponses(body);
         var (pi, po) = PricePerMTok(config);
         return (text, new Usage(Id, config.OpenAiTextModel, 0, input, output, ((input * pi) + (output * po)) / 1_000_000));

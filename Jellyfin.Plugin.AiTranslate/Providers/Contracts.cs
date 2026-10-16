@@ -23,8 +23,14 @@ public interface ITranscriber
 
     bool IsAvailable(PluginConfiguration config);
 
-    /// <summary>Gets the longest chunk the provider accepts with timestamps.</summary>
-    TimeSpan ChunkLength { get; }
+    /// <summary>Gets the longest chunk the provider accepts (timestamps, size and rate limits).</summary>
+    TimeSpan ChunkLength(PluginConfiguration config);
+
+    /// <summary>Gets how many chunks may be sent at the same time.</summary>
+    int Parallelism { get; }
+
+    /// <summary>Rough wall-clock time for a film of this length.</summary>
+    TimeSpan EstimatedTime(TimeSpan duration, PluginConfiguration config);
 
     double PricePerMinute(PluginConfiguration config);
 

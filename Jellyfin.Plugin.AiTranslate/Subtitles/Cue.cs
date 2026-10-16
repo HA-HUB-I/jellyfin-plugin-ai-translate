@@ -99,6 +99,53 @@ public static partial class CueTools
         return result;
     }
 
+    /// <summary>
+    /// Final pass: re-wraps every cue and stretches cues that are too short to read (20 characters per second, at least
+    /// one second) into the gap before the next cue, never overlapping it.
+    /// </summary>
+    public static List<Cue> Polish(IReadOnlyList<Cue> cues)
+    {
+        var result = new List<Cue>(cues.Count);
+        for (int i = 0; i < cues.Count; i++)
+        {
+            var text = WrapKeepingSpeakers(cues[i].Text);
+            var start = cues[i].Start;
+            var end = cues[i].End;
+            var wanted = TimeSpan.FromSeconds(Math.Clamp(text.Length / 20.0, 1.0, MaxCueDuration.TotalSeconds));
+            if (end - start < wanted)
+            {
+                var limit = i + 1 < cues.Count ? cues[i + 1].Start - TimeSpan.FromMilliseconds(50) : start + wanted;
+                end = new TimeSpan(Math.Max(end.Ticks, Math.Min((start + wanted).Ticks, limit.Ticks)));
+            }
+
+            result.Add(new Cue(start, end, text));
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Dialogue ("A\n- B", "- A\n- B", or a model that put both on one line: "- A - B") keeps one speaker per line;
+    /// anything else is wrapped into two balanced lines.
+    /// </summary>
+    public static string WrapKeepingSpeakers(string text)
+    {
+        var lines = text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (lines.Length > 1 && lines.Skip(1).All(l => l.StartsWith('-')))
+        {
+            return string.Join('\n', lines.Select(l => Normalize(l)));
+        }
+
+        var flat = Normalize(string.Join(' ', lines));
+        var m = InlineDialogueRegex().Match(flat);
+        if (m.Success)
+        {
+            return m.Groups[1].Value.Trim() + "\n- " + m.Groups[2].Value.Trim();
+        }
+
+        return Wrap(flat);
+    }
+
     /// <summary>Wraps text into at most two balanced lines.</summary>
     public static string Wrap(string text)
     {
@@ -226,6 +273,10 @@ public static partial class CueTools
 
     [GeneratedRegex(@"[.!?…]$")]
     private static partial Regex SentenceEndRegex();
+
+    // "- Who's there? - Me." / "♪ Hee! ♪ - ♪ Hee! ♪": a dash after sentence-ending punctuation starts the second speaker.
+    [GeneratedRegex(@"^(.+?[.!?…♪""])\s+-\s+(.+)$")]
+    private static partial Regex InlineDialogueRegex();
 
     [GeneratedRegex(@"\d+\n(\d\d:\d\d:\d\d[,.]\d\d\d) --> (\d\d:\d\d:\d\d[,.]\d\d\d)\n(.*?)(?:\n\n|\n*$)", RegexOptions.Singleline)]
     private static partial Regex SrtBlockRegex();

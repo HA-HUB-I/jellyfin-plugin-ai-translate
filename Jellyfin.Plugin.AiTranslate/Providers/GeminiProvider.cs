@@ -17,7 +17,7 @@ using Jellyfin.Plugin.AiTranslate.Subtitles;
 namespace Jellyfin.Plugin.AiTranslate.Providers;
 
 /// <summary>Google Gemini API: Gemini Transcribe (word timestamps, via the Files API) and generateContent for translation.</summary>
-public sealed class GeminiProvider : ITranscriber, ITranslator
+public sealed class GeminiProvider : ITranscriber, ITranslator, IDisposable
 {
     private const string BaseUrl = "https://generativelanguage.googleapis.com/";
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(5);
@@ -28,10 +28,34 @@ public sealed class GeminiProvider : ITranscriber, ITranslator
         _httpClientFactory = httpClientFactory;
     }
 
+    // Gemini bills audio input at 25 tokens per second.
+    private const double AudioTokensPerSecond = 25;
+
+    // One transcription at a time, paced to the tier's tokens-per-minute limit.
+    private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> _thinkingUnsupported = new(StringComparer.Ordinal);
+    private DateTime _nextAllowedUtc = DateTime.MinValue;
+
     public string Id => "gemini";
 
-    // Word timestamps are limited to 30 minutes per request.
-    public TimeSpan ChunkLength => TimeSpan.FromMinutes(25);
+    public int Parallelism => 1;
+
+    public void Dispose() => _gate.Dispose();
+
+    /// <summary>Word timestamps allow 30 minutes per request; the tier's token limit usually allows much less.</summary>
+    public TimeSpan ChunkLength(PluginConfiguration config)
+    {
+        double byRateLimit = 0.9 * Math.Max(1000, config.GeminiAudioTokensPerMinute) / AudioTokensPerSecond;
+        return TimeSpan.FromSeconds(Math.Clamp(byRateLimit, 60, 25 * 60));
+    }
+
+    public TimeSpan EstimatedTime(TimeSpan duration, PluginConfiguration config)
+    {
+        // Paced: each chunk needs (its tokens / limit) minutes before the next one may start.
+        double tokens = duration.TotalSeconds * AudioTokensPerSecond;
+        double minutes = tokens / Math.Max(1000, config.GeminiAudioTokensPerMinute);
+        return TimeSpan.FromMinutes(minutes + 2);
+    }
 
     public string DisplayName(PluginConfiguration config) => "Google Gemini";
 
@@ -43,7 +67,7 @@ public sealed class GeminiProvider : ITranscriber, ITranslator
 
     public async Task<Transcription> TranscribeAsync(AudioChunk chunk, PluginConfiguration config, CancellationToken cancellationToken)
     {
-        var (fileName, fileUri) = await UploadAsync(chunk.Path, "audio/mpeg", config, cancellationToken).ConfigureAwait(false);
+        var (fileName, fileUri) = await RateLimit.RetryAsync(() => UploadAsync(chunk.Path, "audio/mpeg", config, cancellationToken), cancellationToken).ConfigureAwait(false);
         try
         {
             var payload = new JsonObject
@@ -58,7 +82,24 @@ public sealed class GeminiProvider : ITranscriber, ITranslator
                     },
                 },
             };
-            var body = await SendJsonAsync(HttpMethod.Post, "v1beta/interactions", payload, config, cancellationToken).ConfigureAwait(false);
+            string body;
+            await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                var wait = _nextAllowedUtc - DateTime.UtcNow;
+                if (wait > TimeSpan.Zero)
+                {
+                    await Task.Delay(wait, cancellationToken).ConfigureAwait(false);
+                }
+
+                body = await RateLimit.RetryAsync(() => SendJsonAsync(HttpMethod.Post, "v1beta/interactions", payload, config, cancellationToken), cancellationToken).ConfigureAwait(false);
+                double tokens = chunk.Duration.TotalSeconds * AudioTokensPerSecond;
+                _nextAllowedUtc = DateTime.UtcNow + TimeSpan.FromMinutes(tokens / Math.Max(1000, config.GeminiAudioTokensPerMinute));
+            }
+            finally
+            {
+                _gate.Release();
+            }
 
             // Long audio may come back as a running interaction; poll until it completes.
             for (int i = 0; i < 360 && Status(body) is "in_progress" or "queued" or "running"; i++)
@@ -86,17 +127,39 @@ public sealed class GeminiProvider : ITranscriber, ITranslator
 
     public async Task<(string Json, Usage Usage)> CompleteJsonAsync(string systemPrompt, string userJson, PluginConfiguration config, CancellationToken cancellationToken)
     {
-        var payload = new JsonObject
+        JsonObject Payload(bool withThinking)
         {
-            ["systemInstruction"] = new JsonObject { ["parts"] = new JsonArray(new JsonObject { ["text"] = systemPrompt }) },
-            ["contents"] = new JsonArray(new JsonObject { ["role"] = "user", ["parts"] = new JsonArray(new JsonObject { ["text"] = userJson }) }),
-            ["generationConfig"] = new JsonObject
+            var generationConfig = new JsonObject
             {
                 ["responseMimeType"] = "application/json",
                 ["responseSchema"] = Translation.GeminiResponseSchema(),
-            },
-        };
-        var body = await SendJsonAsync(HttpMethod.Post, $"v1beta/models/{Uri.EscapeDataString(config.GeminiTextModel)}:generateContent", payload, config, cancellationToken).ConfigureAwait(false);
+            };
+            if (withThinking)
+            {
+                generationConfig["thinkingConfig"] = new JsonObject { ["thinkingLevel"] = config.GeminiThinkingLevel.Trim() };
+            }
+
+            return new JsonObject
+            {
+                ["systemInstruction"] = new JsonObject { ["parts"] = new JsonArray(new JsonObject { ["text"] = systemPrompt }) },
+                ["contents"] = new JsonArray(new JsonObject { ["role"] = "user", ["parts"] = new JsonArray(new JsonObject { ["text"] = userJson }) }),
+                ["generationConfig"] = generationConfig,
+            };
+        }
+
+        string url = $"v1beta/models/{Uri.EscapeDataString(config.GeminiTextModel)}:generateContent";
+        bool thinking = !string.IsNullOrWhiteSpace(config.GeminiThinkingLevel) && !_thinkingUnsupported.ContainsKey(config.GeminiTextModel);
+        string body;
+        try
+        {
+            body = await RateLimit.RetryAsync(() => SendJsonAsync(HttpMethod.Post, url, Payload(thinking), config, cancellationToken), cancellationToken).ConfigureAwait(false);
+        }
+        catch (HttpRequestException ex) when (thinking && ex.Message.Contains(" 400:", StringComparison.Ordinal) && ex.Message.Contains("hinking", StringComparison.Ordinal))
+        {
+            // This model does not take that thinking setting: remember and use the model default.
+            _thinkingUnsupported[config.GeminiTextModel] = true;
+            body = await RateLimit.RetryAsync(() => SendJsonAsync(HttpMethod.Post, url, Payload(false), config, cancellationToken), cancellationToken).ConfigureAwait(false);
+        }
         var (text, input, output) = ParseGenerateContent(body);
         var (pi, po) = PricePerMTok(config);
         return (text, new Usage(Id, config.GeminiTextModel, 0, input, output, ((input * pi) + (output * po)) / 1_000_000));
