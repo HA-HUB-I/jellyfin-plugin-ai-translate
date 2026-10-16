@@ -454,9 +454,26 @@ public sealed class DubService
     private Video GetVideo(Guid itemId) =>
         _libraryManager.GetItemById(itemId) as Video ?? throw new InvalidOperationException("Item not found: " + itemId);
 
-    // Model names differ between providers, so model + style + text identifies a clip (existing Gemini caches stay valid).
-    private string ClipPath(Video video, ITtsProvider tts, string voice, PluginConfiguration config, string text) =>
-        Path.Combine(DataFolder, "dub", SubtitleJobService.Hash(video.Path), $"{voice}-{SubtitleJobService.Hash(tts.Model(config) + "|" + config.DubStyle + "|" + text)}.wav");
+    /// <summary>
+    /// Where a spoken line is cached. The audio depends only on voice, model, style and text, so the cache is shared by
+    /// all films: a new release of the same film (same subtitles) or a re-run never pays for a line twice.
+    /// Clips from the earlier per-file cache (dub/&lt;media hash&gt;/) are still found.
+    /// </summary>
+    private string ClipPath(Video video, ITtsProvider tts, string voice, PluginConfiguration config, string text)
+    {
+        string name = $"{voice}-{SubtitleJobService.Hash(tts.Model(config) + "|" + config.DubStyle + "|" + text)}.wav";
+        string shared = Path.Combine(DataFolder, "dub", "clips", name);
+        if (!File.Exists(shared))
+        {
+            string legacy = Path.Combine(DataFolder, "dub", SubtitleJobService.Hash(video.Path), name);
+            if (File.Exists(legacy))
+            {
+                return legacy;
+            }
+        }
+
+        return shared;
+    }
 
     private void CheckBudget(PluginConfiguration config, double estimate, string title)
     {
