@@ -18,6 +18,7 @@ public class ModelCatalogTests
             ("models/gemini-3.8-flash-tts", gen),
             ("models/gemini-3.8-flash-lite-tts", gen),
             ("models/gemini-3.1-flash-lite-image", gen),
+            ("models/gemini-nano-banana-2.1", gen),
             ("models/gemini-embedding-001", ["embedContent"]),
             ("models/imagen-4.0-generate-001", ["predict"]),
         ]);

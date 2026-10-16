@@ -71,7 +71,7 @@ public sealed class ModelCatalog
         var transcribe = all.Where(m => Has(m.Id, "transcribe") && !Has(m.Id, "live")).Select(m => m.Id);
         var text = all.Where(m => m.Id.StartsWith("gemini", StringComparison.Ordinal)
                 && m.Methods.Contains("generateContent")
-                && !Has(m.Id, "tts", "transcribe", "image", "embedding", "live", "audio", "robotics", "computer-use"))
+                && !Has(m.Id, "tts", "transcribe", "image", "banana", "embedding", "live", "audio", "robotics", "computer-use"))
             .Select(m => m.Id);
         return new ModelLists(Sort(transcribe), Sort(text), Sort(tts), null);
     }
