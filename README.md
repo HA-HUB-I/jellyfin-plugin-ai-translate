@@ -43,7 +43,7 @@ found none. Finished AI subtitles are always listed (free).
 4. **Subtitles**: lines are wrapped to ≤ 2 × 42 characters and handed to Jellyfin, which saves them next to
    the film (or in its metadata folder) like any downloaded subtitle.
 
-If the client gives up waiting, the job keeps running; search again and pick **✓ Готови**.
+If the client gives up waiting, the job keeps running and Jellyfin still saves the subtitle when it finishes.
 
 ## Costs
 
