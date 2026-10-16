@@ -23,7 +23,18 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.AiTranslate.Dubbing;
 
 /// <summary>What a voice-over of one item would cost.</summary>
-public sealed record DubEstimate(Guid ItemId, string Title, string SubtitleLabel, int Segments, int Characters, double SpeechMinutes, double CostUsd, double Minutes, bool Exists);
+public sealed record DubEstimate(
+    Guid ItemId,
+    string Title,
+    string SubtitleLabel,
+    int Segments,
+    int Characters,
+    double SpeechMinutes,
+    double CostUsd,
+    double Minutes,
+    bool Exists,
+    int Requests = 0,
+    int RequestsPerDay = 0);
 
 /// <summary>Voice-over: Bulgarian (target-language) subtitles → TTS → ducked mix with the original audio → "Film.bg.mka".</summary>
 public sealed class DubService
@@ -91,11 +102,13 @@ public sealed class DubService
         int chars = segments.Sum(s => s.Text.Length);
         double seconds = chars / DubPlanner.CharactersPerSecond;
         double cost = _tts.Estimate(chars, seconds, Config) * (1 - CachedShare(video, segments));
-        int toSynthesize = (int)Math.Round(segments.Count * (1 - CachedShare(video, segments)));
+        var config = Config;
+        var missing = Enumerable.Range(0, segments.Count).Where(i => !File.Exists(ClipPath(video, config.DubVoice, config, segments[i].Text))).ToList();
+        int requests = Batches(missing, segments, config).Count;
         double minutes = 3 + Math.Max(
-            GeminiTts.PacedTime(toSynthesize, Config).TotalMinutes,
-            toSynthesize * 6.0 / 60 / Math.Max(1, Config.DubParallelism));
-        return new DubEstimate(itemId, video.Name, Label(stream), segments.Count, chars, seconds / 60, cost, minutes, File.Exists(OutputPath(video, language)));
+            GeminiTts.PacedTime(requests, config).TotalMinutes,
+            requests * 20.0 / 60 / Math.Max(1, config.DubParallelism));
+        return new DubEstimate(itemId, video.Name, Label(stream), segments.Count, chars, seconds / 60, cost, minutes, File.Exists(OutputPath(video, language)), requests, config.GeminiTtsRequestsPerDay);
     }
 
     /// <summary>Starts a voice-over in the background (one per item).</summary>
@@ -146,39 +159,49 @@ public sealed class DubService
         int chars = segments.Sum(s => s.Text.Length);
         CheckBudget(config, _tts.Estimate(chars, chars / DubPlanner.CharactersPerSecond, config) * (1 - CachedShare(video, segments)), video.Name);
 
-        // 1) Speech for every segment (cached on disk, so an interrupted run resumes for free).
+        // 1) Speech for every segment (cached on disk per line, so an interrupted run resumes for free).
+        //    Several lines go into one request (TTS quotas count requests) and are split again at the pauses.
         var clips = new short[segments.Count][];
         var usage = new ConcurrentBag<Usage>();
-        int done = 0;
         int rate = 24000;
+        var missing = new List<int>();
+        for (int i = 0; i < segments.Count; i++)
+        {
+            string cache = ClipPath(video, voice, config, segments[i].Text);
+            if (File.Exists(cache))
+            {
+                (clips[i], rate) = Wav.ReadPcm16Mono(await File.ReadAllBytesAsync(cache).ConfigureAwait(false));
+            }
+            else
+            {
+                missing.Add(i);
+            }
+        }
+
+        var batches = Batches(missing, segments, config);
+        int done = segments.Count - missing.Count;
         try
         {
-            Stage($"синтез на глас 0/{segments.Count}");
+            Stage($"синтез на глас {done}/{segments.Count} ({batches.Count} заявки)");
             await Parallel.ForEachAsync(
-                Enumerable.Range(0, segments.Count),
+                batches,
                 new ParallelOptions { MaxDegreeOfParallelism = Math.Clamp(config.DubParallelism, 1, 8) },
-                async (i, ct) =>
+                async (batch, ct) =>
                 {
-                    string cache = ClipPath(video, voice, config, segments[i].Text);
-                    if (File.Exists(cache))
+                    string text = string.Join(config.DubLineSeparator, batch.Select(i => segments[i].Text));
+                    var clip = await _tts.SynthesizeAsync(text, voice, config.DubStyle, config, ct).ConfigureAwait(false);
+                    usage.Add(clip.Usage);
+                    rate = clip.SampleRate;
+                    var pieces = ClipSplitter.Split(clip.Samples, clip.SampleRate, batch.Select(i => segments[i].Text.Length).ToList());
+                    for (int k = 0; k < batch.Count; k++)
                     {
-                        (clips[i], rate) = Wav.ReadPcm16Mono(await File.ReadAllBytesAsync(cache, ct).ConfigureAwait(false));
-                    }
-                    else
-                    {
-                        var clip = await _tts.SynthesizeAsync(segments[i].Text, voice, config.DubStyle, config, ct).ConfigureAwait(false);
-                        usage.Add(clip.Usage);
-                        clips[i] = clip.Samples;
-                        rate = clip.SampleRate;
+                        clips[batch[k]] = pieces[k];
+                        string cache = ClipPath(video, voice, config, segments[batch[k]].Text);
                         Directory.CreateDirectory(Path.GetDirectoryName(cache)!);
-                        await File.WriteAllBytesAsync(cache, Wav.WritePcm16Mono(clip.Samples, clip.SampleRate), ct).ConfigureAwait(false);
+                        await File.WriteAllBytesAsync(cache, Wav.WritePcm16Mono(pieces[k], clip.SampleRate), ct).ConfigureAwait(false);
                     }
 
-                    int n = Interlocked.Increment(ref done);
-                    if (n % 10 == 0 || n == segments.Count)
-                    {
-                        Stage($"синтез на глас {n}/{segments.Count}");
-                    }
+                    Stage($"синтез на глас {Interlocked.Add(ref done, batch.Count)}/{segments.Count}");
                 }).ConfigureAwait(false);
         }
         finally
@@ -236,6 +259,27 @@ public sealed class DubService
             video.Id,
             new MetadataRefreshOptions(new DirectoryService(_fileSystem)) { MetadataRefreshMode = MetadataRefreshMode.FullRefresh, ImageRefreshMode = MetadataRefreshMode.None },
             RefreshPriority.High);
+    }
+
+    /// <summary>Groups consecutive missing lines into requests of at most N lines / 700 characters.</summary>
+    internal static List<List<int>> Batches(IReadOnlyList<int> missing, IReadOnlyList<DubSegment> segments, PluginConfiguration config)
+    {
+        int perRequest = Math.Clamp(config.DubLinesPerRequest, 1, 30);
+        var batches = new List<List<int>>();
+        foreach (int i in missing)
+        {
+            var last = batches.Count > 0 ? batches[^1] : null;
+            if (last is null || last.Count >= perRequest || last[^1] != i - 1 || last.Sum(j => segments[j].Text.Length) + segments[i].Text.Length > 700)
+            {
+                batches.Add([i]);
+            }
+            else
+            {
+                last.Add(i);
+            }
+        }
+
+        return batches;
     }
 
     internal static List<string> MixArguments(string mediaPath, int audioIndex, string narrationRaw, int narrationRate, string language, string output)

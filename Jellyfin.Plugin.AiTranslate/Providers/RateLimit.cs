@@ -54,7 +54,10 @@ public static partial class RateLimit
         }
     }
 
-    internal static bool IsRetryable(string message) => message.Contains(" 429:", StringComparison.Ordinal) || message.Contains(" 503:", StringComparison.Ordinal);
+    // A daily quota ("100 requests per day … retry in 14h") is not worth waiting for inside a job.
+    internal static bool IsRetryable(string message) =>
+        (message.Contains(" 429:", StringComparison.Ordinal) || message.Contains(" 503:", StringComparison.Ordinal))
+        && !message.Contains("per day", StringComparison.OrdinalIgnoreCase);
 
     internal static TimeSpan RetryDelay(string message, int attempt)
     {

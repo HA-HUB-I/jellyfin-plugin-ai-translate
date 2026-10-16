@@ -101,6 +101,54 @@ public class DubTests
         Assert.Equal(TimeSpan.FromMinutes(63.8), GeminiTts.PacedTime(638, new Configuration.PluginConfiguration()));
     }
 
+    private static short[] Tone(double seconds, int rate = 24000) =>
+        Enumerable.Range(0, (int)(seconds * rate)).Select(i => (short)(8000 * Math.Sin(i * 2 * Math.PI * 220 / rate))).ToArray();
+
+    private static short[] Silence(double seconds, int rate = 24000) => new short[(int)(seconds * rate)];
+
+    [Fact]
+    public void SplitterCutsAtThePausesBetweenLines()
+    {
+        // Three "lines" of 1.0 s, 2.0 s and 0.6 s with 0.6 s pauses, plus a short 0.1 s breath inside line 2.
+        var clip = Tone(1.0).Concat(Silence(0.6)).Concat(Tone(0.9)).Concat(Silence(0.1)).Concat(Tone(1.0))
+            .Concat(Silence(0.6)).Concat(Tone(0.6)).ToArray();
+
+        var pieces = ClipSplitter.Split(clip, 24000, [16, 33, 10]);
+
+        Assert.Equal(3, pieces.Count);
+        Assert.InRange(pieces[0].Length / 24000.0, 0.95, 1.2);
+        Assert.InRange(pieces[1].Length / 24000.0, 1.9, 2.2);
+        Assert.InRange(pieces[2].Length / 24000.0, 0.55, 0.8);
+    }
+
+    [Fact]
+    public void SplitterFallsBackToTextShareWithoutPauses()
+    {
+        var pieces = ClipSplitter.Split(Tone(3.0), 24000, [10, 20]);
+        Assert.Equal(2, pieces.Count);
+        Assert.InRange(pieces[0].Length / 24000.0, 0.9, 1.15);
+    }
+
+    [Fact]
+    public void BatchesAreConsecutiveAndBounded()
+    {
+        var segments = Enumerable.Range(0, 30).Select(i => new DubSegment(TimeSpan.FromSeconds(i * 5), TimeSpan.FromSeconds((i * 5) + 2), new string('а', 40))).ToList();
+        var missing = Enumerable.Range(0, 30).Where(i => i != 12).ToList();
+        var batches = DubService.Batches(missing, segments, new Configuration.PluginConfiguration { DubLinesPerRequest = 10 });
+
+        Assert.Equal(missing, batches.SelectMany(b => b));
+        Assert.All(batches, b => Assert.True(b.Count <= 10));
+        Assert.All(batches, b => Assert.Equal(Enumerable.Range(b[0], b.Count), b));  // no gaps inside a request
+        Assert.Equal(4, batches.Count);                                                // 0–9, 10–11, 13–22, 23–29
+    }
+
+    [Fact]
+    public void DailyQuotaIsNotRetried()
+    {
+        Assert.False(RateLimit.IsRetryable("Gemini TTS 429: limit: 100 requests per day on Tier 1. Please retry in 14h22m27s"));
+        Assert.True(RateLimit.IsRetryable("Gemini TTS 429: limit: 10 requests per minute on Tier 1. Please retry in 41s"));
+    }
+
     [Fact]
     public void MixDucksOriginalUnderVoiceAndTagsTrack()
     {

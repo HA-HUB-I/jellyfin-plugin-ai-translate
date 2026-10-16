@@ -114,6 +114,15 @@ public class PluginConfiguration : BasePluginConfiguration
     /// <summary>Gets or sets the TTS requests-per-minute limit of the account's tier (Gemini Tier 1: 10). Requests are paced to it.</summary>
     public int GeminiTtsRequestsPerMinute { get; set; } = 10;
 
+    /// <summary>Gets or sets the TTS requests-per-day limit of the account's tier (Gemini Tier 1: 100).</summary>
+    public int GeminiTtsRequestsPerDay { get; set; } = 100;
+
+    /// <summary>Gets or sets how many subtitle lines are spoken in one TTS request (split again by the pauses between them).</summary>
+    public int DubLinesPerRequest { get; set; } = 10;
+
+    /// <summary>Gets or sets the marker placed between lines in one request so the voice pauses there.</summary>
+    public string DubLineSeparator { get; set; } = " <long pause> ";
+
     /// <summary>Gets or sets the TTS text input price (USD per 1M tokens).</summary>
     public double PriceGeminiTtsInputPerMTok { get; set; } = 0.5;
 
