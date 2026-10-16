@@ -129,6 +129,35 @@ public class SourceTests
     }
 
     [Fact]
+    public void OnlyTheActiveProviderWithAKeyIsOfferedUnlessComparing()
+    {
+        var config = new Configuration.PluginConfiguration { GeminiApiKey = "g", OpenAiApiKey = "o", ActiveTranslator = "openai", ActiveTranscriber = "gemini" };
+        var jobs = NewJobs(config);
+
+        Assert.Equal(["openai"], jobs.AvailableTranslators().Select(x => x.Id));
+        Assert.Equal([("gemini", "openai")], jobs.AvailableCombinations().Select(c => (c.Transcriber.Id, c.Translator.Id)));
+
+        config.OpenAiApiKey = string.Empty;                       // active one loses its key → falls back to one that has
+        Assert.Equal(["gemini"], jobs.AvailableTranslators().Select(x => x.Id));
+
+        config.OpenAiApiKey = "o";
+        config.CompareProviders = true;                           // compare → every provider with a key
+        Assert.Equal(4, jobs.AvailableCombinations().Count());
+    }
+
+    private static SubtitleJobService NewJobs(Configuration.PluginConfiguration config)
+    {
+        var jobs = (SubtitleJobService)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(SubtitleJobService));
+        var providers = new object[] { new Providers.OpenAiProvider(null!), new Providers.GeminiProvider(null!) };
+        typeof(SubtitleJobService).GetField("_transcribers", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .SetValue(jobs, providers.Cast<Providers.ITranscriber>().ToList());
+        typeof(SubtitleJobService).GetField("_translators", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .SetValue(jobs, providers.Cast<Providers.ITranslator>().ToList());
+        SubtitleJobService.ConfigOverride = config;
+        return jobs;
+    }
+
+    [Fact]
     public void JobSourceKeys()
     {
         Assert.Equal("gemini", new SubtitleJob("/m", "T", "bg", "gemini", "gemini").SourceKey);

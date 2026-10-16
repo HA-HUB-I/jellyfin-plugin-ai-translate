@@ -80,28 +80,51 @@ public sealed class SubtitleJobService
 
     public IReadOnlyCollection<JobStatus> Running => _status.Values.ToList();
 
-    private static PluginConfiguration Config => Plugin.Instance?.Configuration ?? new PluginConfiguration();
+    private static PluginConfiguration Config => ConfigOverride ?? Plugin.Instance?.Configuration ?? new PluginConfiguration();
+
+    /// <summary>Gets or sets a configuration used instead of the plugin's (tests only).</summary>
+    internal static PluginConfiguration? ConfigOverride { get; set; }
 
     private string DataFolder => Plugin.Instance?.DataFolderPath ?? Path.Combine(_appPaths.DataPath, "ai-translate");
 
-    /// <summary>Translators that are enabled and have a key.</summary>
+    /// <summary>The active translator (or, when comparing, every enabled one) among those with a key.</summary>
     public IEnumerable<ITranslator> AvailableTranslators()
     {
         var c = Config;
-        return _translators.Where(x => x.IsAvailable(c) && IsEnabled(x, c, transcription: false));
+        var keyed = _translators.Where(x => x.IsAvailable(c)).ToList();
+        return c.CompareProviders
+            ? keyed.Where(x => IsEnabled(x, c, transcription: false))
+            : Active(keyed, c.ActiveTranslator);
     }
 
-    /// <summary>Transcriber × translator pairs that are enabled and have a key.</summary>
+    /// <summary>Transcriber × translator pairs: the active ones, or every enabled pair when comparing.</summary>
     public IEnumerable<(ITranscriber Transcriber, ITranslator Translator)> AvailableCombinations()
     {
         var c = Config;
-        foreach (var t in _transcribers.Where(t => t.IsAvailable(c) && IsEnabled(t, c, transcription: true)))
+        var keyed = _transcribers.Where(t => t.IsAvailable(c)).ToList();
+        var transcribers = c.CompareProviders ? keyed.Where(t => IsEnabled(t, c, transcription: true)) : Active(keyed, c.ActiveTranscriber);
+        foreach (var t in transcribers)
         {
             foreach (var x in AvailableTranslators())
             {
                 yield return (t, x);
             }
         }
+    }
+
+    /// <summary>Providers with a key, for the settings page: (id, name, has key).</summary>
+    public IEnumerable<(string Id, string Name, bool HasKey)> ProviderKeys()
+    {
+        var c = Config;
+        return _translators.Select(x => (x.Id, x.DisplayName(c), x.IsAvailable(c)));
+    }
+
+    // The configured provider if it has a key, otherwise the first one that has.
+    private static IEnumerable<T> Active<T>(IReadOnlyList<T> keyed, string activeId)
+        where T : class
+    {
+        var chosen = keyed.FirstOrDefault(p => p is ITranslator x ? x.Id == activeId : p is ITranscriber t && t.Id == activeId) ?? keyed.FirstOrDefault();
+        return chosen is null ? [] : [chosen];
     }
 
     public string ModelLabel(ITranscriber t, ITranslator x)

@@ -25,6 +25,29 @@ public sealed class AiTranslateController : ControllerBase
         _models = models;
     }
 
+    /// <summary>Providers and whether their key works (it is checked by listing the account's models).</summary>
+    [HttpGet("Providers")]
+    public async Task<ActionResult<object>> GetProviders(CancellationToken cancellationToken)
+    {
+        var config = Plugin.Instance?.Configuration ?? new Configuration.PluginConfiguration();
+        var result = new System.Collections.Generic.List<object>();
+        foreach (var (id, name, hasKey) in _jobs.ProviderKeys())
+        {
+            string? error = null;
+            int models = 0;
+            if (hasKey)
+            {
+                var lists = await _models.GetAsync(id, config, cancellationToken).ConfigureAwait(false);
+                error = lists.Error;
+                models = lists.Text.Count + lists.Transcribe.Count + lists.Tts.Count;
+            }
+
+            result.Add(new { Id = id, Name = name, HasKey = hasKey, KeyOk = hasKey && error is null, Error = error, Models = models });
+        }
+
+        return Ok(result);
+    }
+
     /// <summary>Current models of both providers, grouped by use (for the model drop-downs).</summary>
     [HttpGet("Models")]
     public async Task<ActionResult<object>> GetModels(CancellationToken cancellationToken)

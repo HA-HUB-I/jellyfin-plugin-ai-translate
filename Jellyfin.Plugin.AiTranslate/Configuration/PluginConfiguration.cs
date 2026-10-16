@@ -11,7 +11,18 @@ public class PluginConfiguration : BasePluginConfiguration
     /// <summary>Gets or sets the Gemini API key (Google AI Studio).</summary>
     public string GeminiApiKey { get; set; } = string.Empty;
 
-    // --- Providers offered in the subtitle search ---
+    // --- Active providers: one per function by default; only providers with a key can be chosen ---
+
+    /// <summary>Gets or sets the provider used for translation ("gemini", "openai").</summary>
+    public string ActiveTranslator { get; set; } = "gemini";
+
+    /// <summary>Gets or sets the provider used for speech recognition ("gemini", "openai").</summary>
+    public string ActiveTranscriber { get; set; } = "gemini";
+
+    /// <summary>Gets or sets a value indicating whether the subtitle search lists every provider with a key (to compare), not only the active ones.</summary>
+    public bool CompareProviders { get; set; }
+
+    // --- Providers allowed when comparing ---
 
     public bool EnableOpenAiTranscription { get; set; } = true;
 

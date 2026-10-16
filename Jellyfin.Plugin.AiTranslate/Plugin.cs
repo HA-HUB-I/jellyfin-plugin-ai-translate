@@ -36,7 +36,13 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
             new PluginPageInfo
             {
                 Name = Name,
-                EmbeddedResourcePath = string.Format(CultureInfo.InvariantCulture, "{0}.Configuration.configPage.html", GetType().Namespace)
+                DisplayName = "AI Translate",
+                EmbeddedResourcePath = string.Format(CultureInfo.InvariantCulture, "{0}.Configuration.configPage.html", GetType().Namespace),
+
+                // Shortcut in the dashboard menu where the web client shows plugin pages.
+                EnableInMainMenu = true,
+                MenuSection = "server",
+                MenuIcon = "translate",
             }
         ];
     }

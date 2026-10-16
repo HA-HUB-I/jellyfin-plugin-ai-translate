@@ -8,11 +8,14 @@
     <div id="AiTranslateConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-checkbox,emby-textarea,emby-select">
         <style>
             #AiTranslateConfigPage .aiTabs { display: flex; flex-wrap: wrap; gap: .4em; margin: 1em 0 1.5em; border-bottom: 1px solid rgba(128,128,128,.35); }
+            #AiTranslateConfigPage .aiTabs.sub { margin: .5em 0 1em; border-bottom-style: dashed; }
             #AiTranslateConfigPage .aiTab { background: none; border: 0; border-bottom: 3px solid transparent; color: inherit; padding: .6em 1em; cursor: pointer; font: inherit; opacity: .7; }
             #AiTranslateConfigPage .aiTab.active { border-bottom-color: #00a4dc; opacity: 1; font-weight: 600; }
-            #AiTranslateConfigPage .aiPanel { display: none; }
-            #AiTranslateConfigPage .aiPanel.active { display: block; }
+            #AiTranslateConfigPage .aiPanel, #AiTranslateConfigPage .aiSubPanel { display: none; }
+            #AiTranslateConfigPage .aiPanel.active, #AiTranslateConfigPage .aiSubPanel.active { display: block; }
             #AiTranslateConfigPage .aiWarn { color: #e57373; font-weight: 600; }
+            #AiTranslateConfigPage .aiOk { color: #81c784; font-weight: 600; }
+            #AiTranslateConfigPage .aiOff { opacity: .5; }
             #AiTranslateConfigPage .aiSaveBar { position: sticky; bottom: 0; padding: 1em 0; background: inherit; }
         </style>
         <div data-role="content">
@@ -22,29 +25,17 @@
                         <h2 class="sectionTitle">AI Translate</h2>
                     </div>
 
-                    <div class="aiTabs">
-                        <button type="button" class="aiTab active" data-tab="keys">Ключове и разходи</button>
+                    <div class="aiTabs" data-group="main">
+                        <button type="button" class="aiTab active" data-tab="costs">Разходи</button>
                         <button type="button" class="aiTab" data-tab="subs">Субтитри</button>
                         <button type="button" class="aiTab" data-tab="dub">Дублаж</button>
-                        <button type="button" class="aiTab" data-tab="models">Модели и лимити</button>
+                        <button type="button" class="aiTab" data-tab="providers">Доставчици</button>
                     </div>
 
-                    <!-- ===== Ключове и разходи ===== -->
-                    <div class="aiPanel active" data-tab="keys">
+                    <!-- ===== Разходи ===== -->
+                    <div class="aiPanel active" data-tab="costs">
                         <h3>Този месец</h3>
                         <div id="aiStatus" class="fieldDescription">…</div>
-
-                        <h3>API ключове</h3>
-                        <div class="inputContainer">
-                            <label class="inputLabel inputLabelUnfocused" for="OpenAiApiKey">OpenAI API ключ</label>
-                            <input id="OpenAiApiKey" type="password" is="emby-input" autocomplete="off" />
-                        </div>
-                        <div class="inputContainer">
-                            <label class="inputLabel inputLabelUnfocused" for="GeminiApiKey">Google Gemini API ключ</label>
-                            <input id="GeminiApiKey" type="password" is="emby-input" autocomplete="off" />
-                            <div class="fieldDescription">От Google AI Studio. Ключовете се пазят в настройките на плъгина на този сървър.</div>
-                        </div>
-
                         <h3>Месечен лимит</h3>
                         <div class="inputContainer">
                             <label class="inputLabel inputLabelUnfocused" for="MonthlyBudgetUsd">Максимум на месец (USD, по оценка)</label>
@@ -55,7 +46,22 @@
 
                     <!-- ===== Субтитри ===== -->
                     <div class="aiPanel" data-tab="subs">
-                        <p class="fieldDescription">Филм → <b>⋮ → Редактирай субтитри → Търсене</b>: всеки вариант се показва с цена. Нищо не се таксува без избор; автоматичното сваляне на субтитри никога не пуска платена задача.</p>
+                        <p class="fieldDescription">Филм → <b>⋮ → Редактирай субтитри → Търсене</b>: вариантите се показват с цена. Нищо не се таксува без избор; автоматичното сваляне на субтитри никога не пуска платена задача.</p>
+
+                        <h3>Активни доставчици</h3>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="ActiveTranslator">Превод чрез</label>
+                            <select id="ActiveTranslator" is="emby-select" class="emby-select-withcolor emby-select" data-provider-select></select>
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="ActiveTranscriber">Разпознаване на говор (от аудиото) чрез</label>
+                            <select id="ActiveTranscriber" is="emby-select" class="emby-select-withcolor emby-select" data-provider-select></select>
+                            <div class="fieldDescription">Избират се само доставчици с работещ ключ (таб „Доставчици“).</div>
+                        </div>
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label class="emby-checkbox-label"><input id="CompareProviders" type="checkbox" is="emby-checkbox" /><span>Сравнение: предлагай всички доставчици с ключ</span></label>
+                            <div class="fieldDescription checkboxFieldDescription">Изключено = в търсенето има по един вариант (активните доставчици).</div>
+                        </div>
 
                         <h3>Кога да се предлага</h3>
                         <div class="checkboxContainer checkboxContainer-withDescription">
@@ -69,23 +75,14 @@
                         </div>
 
                         <h3>Превод на съществуващи субтитри (бързо, евтино)</h3>
-                        <div class="checkboxContainer checkboxContainer-withDescription">
-                            <label class="emby-checkbox-label"><input id="PreferExistingSubtitles" type="checkbox" is="emby-checkbox" /><span>Ако има текстови субтитри на друг език, предлагай само превода им (скрий бавното „от аудиото“)</span></label>
-                        </div>
+                        <div class="checkboxContainer"><label class="emby-checkbox-label"><input id="PreferExistingSubtitles" type="checkbox" is="emby-checkbox" /><span>Ако има текстови субтитри на друг език, предлагай само превода им (скрий бавното „от аудиото“)</span></label></div>
                         <div class="inputContainer">
                             <label class="inputLabel inputLabelUnfocused" for="SourceLanguages">Предпочитан изходен език</label>
                             <input id="SourceLanguages" type="text" is="emby-input" />
-                            <div class="fieldDescription">По ред на предпочитание, напр. <code>en</code> или <code>en,de</code>. Използват се вградени и външни текстови субтитри; картинковите (DVD/Blu-ray) — не.</div>
+                            <div class="fieldDescription">По ред на предпочитание, напр. <code>en</code> или <code>en,de</code>. Картинковите субтитри (DVD/Blu-ray) не се използват.</div>
                         </div>
                         <div class="checkboxContainer"><label class="emby-checkbox-label"><input id="UseOtherProvidersAsSource" type="checkbox" is="emby-checkbox" /><span>Ако филмът няма такива, вземи изходни субтитри от другите доставчици (OpenSubtitles и др.)</span></label></div>
                         <div class="checkboxContainer"><label class="emby-checkbox-label"><input id="StripHearingImpaired" type="checkbox" is="emby-checkbox" /><span>Махни бележките за хора с увреден слух ([музика], (въздиша), ИВАН:) преди превода</span></label></div>
-
-                        <h3>Доставчици</h3>
-                        <div class="checkboxContainer"><label class="emby-checkbox-label"><input id="EnableGeminiTranslation" type="checkbox" is="emby-checkbox" /><span>Превод: Google Gemini</span></label></div>
-                        <div class="checkboxContainer"><label class="emby-checkbox-label"><input id="EnableOpenAiTranslation" type="checkbox" is="emby-checkbox" /><span>Превод: OpenAI</span></label></div>
-                        <div class="checkboxContainer"><label class="emby-checkbox-label"><input id="EnableGeminiTranscription" type="checkbox" is="emby-checkbox" /><span>Разпознаване на говор (от аудиото): Google Gemini</span></label></div>
-                        <div class="checkboxContainer"><label class="emby-checkbox-label"><input id="EnableOpenAiTranscription" type="checkbox" is="emby-checkbox" /><span>Разпознаване на говор (от аудиото): OpenAI</span></label></div>
-
                         <div class="inputContainer">
                             <label class="textareaLabel" for="TranslationInstructions">Допълнителни указания за преводача</label>
                             <textarea id="TranslationInstructions" is="emby-textarea" rows="2" placeholder="напр. Между приятели — на „ти“. 'Captain' → 'капитане'."></textarea>
@@ -96,7 +93,7 @@
                     <div class="aiPanel" data-tab="dub">
                         <p class="fieldDescription">Озвучава филм от българските му субтитри: един диктор, оригиналният звук остава отдолу (по-тих, докато говори дикторът). Резултатът е отделна аудиопътечка „<b>Български (AI войсоувър)</b>“ до филма — видеото не се пипа. Пуска се само ръчно.</p>
                         <div class="inputContainer">
-                            <label class="inputLabel inputLabelUnfocused" for="DubProvider">Доставчик на глас</label>
+                            <label class="inputLabel inputLabelUnfocused" for="DubProvider">Глас чрез</label>
                             <select id="DubProvider" is="emby-select" class="emby-select-withcolor emby-select"></select>
                             <div class="fieldDescription" id="dubQuota"></div>
                         </div>
@@ -117,62 +114,88 @@
                         </div>
                         <button is="emby-button" type="button" id="dubSearchBtn" class="raised emby-button"><span>Търси</span></button>
                         <div id="dubResults" style="margin:1em 0"></div>
+
+                        <details>
+                            <summary>Разширени</summary>
+                            <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="DubLinesPerRequest">Реплики в една заявка</label><input id="DubLinesPerRequest" type="number" step="any" min="1" max="30" is="emby-input" /><div class="fieldDescription">Разрязват се обратно по паузите и всяка отива на своето време.</div></div>
+                            <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="DubMaxTempo">Максимално ускорение на реплика</label><input id="DubMaxTempo" type="number" step="any" min="1" max="1.5" is="emby-input" /></div>
+                            <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="DubParallelism">Едновременни заявки</label><input id="DubParallelism" type="number" step="any" min="1" max="8" is="emby-input" /></div>
+                        </details>
                     </div>
 
-                    <!-- ===== Модели и лимити ===== -->
-                    <div class="aiPanel" data-tab="models">
-                        <p class="fieldDescription" id="modelsInfo">Списъците се зареждат от акаунтите ти в Google и OpenAI…</p>
-
-                        <h3>Google Gemini</h3>
-                        <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="GeminiTextModel">Превод</label><select id="GeminiTextModel" is="emby-select" class="emby-select-withcolor emby-select" data-models="gemini.Text"></select></div>
-                        <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="GeminiTranscribeModel">Разпознаване на говор</label><select id="GeminiTranscribeModel" is="emby-select" class="emby-select-withcolor emby-select" data-models="gemini.Transcribe"></select></div>
-                        <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="GeminiTtsModel">Глас (дублаж)</label><select id="GeminiTtsModel" is="emby-select" class="emby-select-withcolor emby-select" data-models="gemini.Tts"></select><div class="fieldDescription">Всеки модел има собствен дневен лимит; <code>…-lite-tts</code> е по-евтин.</div></div>
-                        <div class="inputContainer">
-                            <label class="inputLabel inputLabelUnfocused" for="GeminiThinkingLevel">„Мислене“ при превод</label>
-                            <select id="GeminiThinkingLevel" is="emby-select" class="emby-select-withcolor emby-select">
-                                <option value="low">low — препоръчано (≈3× по-евтино, същият резултат)</option>
-                                <option value="medium">medium</option>
-                                <option value="high">high</option>
-                                <option value="">по подразбиране на модела</option>
-                            </select>
+                    <!-- ===== Доставчици ===== -->
+                    <div class="aiPanel" data-tab="providers">
+                        <div class="aiTabs sub" data-group="provider">
+                            <button type="button" class="aiTab active" data-tab="gemini">Google Gemini <span data-key-badge="gemini"></span></button>
+                            <button type="button" class="aiTab" data-tab="openai">OpenAI <span data-key-badge="openai"></span></button>
                         </div>
 
-                        <h3>OpenAI</h3>
-                        <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="OpenAiTextModel">Превод</label><select id="OpenAiTextModel" is="emby-select" class="emby-select-withcolor emby-select" data-models="openai.Text"></select></div>
-                        <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="OpenAiTranscribeModel">Разпознаване на говор</label><select id="OpenAiTranscribeModel" is="emby-select" class="emby-select-withcolor emby-select" data-models="openai.Transcribe"></select><div class="fieldDescription">Нужни са времена на репликите — <code>whisper-1</code> ги дава.</div></div>
-                        <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="OpenAiTtsModel">Глас (дублаж)</label><select id="OpenAiTtsModel" is="emby-select" class="emby-select-withcolor emby-select" data-models="openai.Tts"></select></div>
-                        <div class="inputContainer">
-                            <label class="inputLabel inputLabelUnfocused" for="OpenAiReasoningEffort">„Мислене“ при превод</label>
-                            <select id="OpenAiReasoningEffort" is="emby-select" class="emby-select-withcolor emby-select">
-                                <option value="low">low — препоръчано</option>
-                                <option value="medium">medium</option>
-                                <option value="high">high</option>
-                                <option value="">по подразбиране на модела</option>
-                            </select>
+                        <!-- Google Gemini -->
+                        <div class="aiSubPanel active" data-tab="gemini">
+                            <div class="inputContainer">
+                                <label class="inputLabel inputLabelUnfocused" for="GeminiApiKey">API ключ (Google AI Studio)</label>
+                                <input id="GeminiApiKey" type="password" is="emby-input" autocomplete="off" />
+                                <div class="fieldDescription" data-key-status="gemini"></div>
+                            </div>
+                            <div data-needs-key="gemini">
+                                <h3>Модели</h3>
+                                <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="GeminiTextModel">Превод</label><select id="GeminiTextModel" is="emby-select" class="emby-select-withcolor emby-select" data-models="gemini.Text"></select></div>
+                                <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="GeminiTranscribeModel">Разпознаване на говор</label><select id="GeminiTranscribeModel" is="emby-select" class="emby-select-withcolor emby-select" data-models="gemini.Transcribe"></select></div>
+                                <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="GeminiTtsModel">Глас (дублаж)</label><select id="GeminiTtsModel" is="emby-select" class="emby-select-withcolor emby-select" data-models="gemini.Tts"></select><div class="fieldDescription">Всеки модел има собствен дневен лимит; <code>…-lite-tts</code> е по-евтин.</div></div>
+                                <div class="inputContainer">
+                                    <label class="inputLabel inputLabelUnfocused" for="GeminiThinkingLevel">„Мислене“ при превод</label>
+                                    <select id="GeminiThinkingLevel" is="emby-select" class="emby-select-withcolor emby-select">
+                                        <option value="low">low — препоръчано (≈3× по-евтино, същият резултат)</option>
+                                        <option value="medium">medium</option>
+                                        <option value="high">high</option>
+                                        <option value="">по подразбиране на модела</option>
+                                    </select>
+                                </div>
+                                <h3>Лимити на акаунта</h3>
+                                <div class="fieldDescription">Реалните ти лимити: Google AI Studio → Rate limits.</div>
+                                <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="GeminiTtsRequestsPerMinute">Глас — заявки в минута</label><input id="GeminiTtsRequestsPerMinute" type="number" step="any" min="1" is="emby-input" /><div class="fieldDescription">Tier 1: 10.</div></div>
+                                <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="GeminiTtsRequestsPerDay">Глас — заявки на ден</label><input id="GeminiTtsRequestsPerDay" type="number" step="any" min="1" is="emby-input" /><div class="fieldDescription">Tier 1: 100 (нулира се в 03:00 българско време). Филм ≈ 60–70 заявки.</div></div>
+                                <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="GeminiAudioTokensPerMinute">Разпознаване — аудио токени в минута</label><input id="GeminiAudioTokensPerMinute" type="number" step="any" min="1000" is="emby-input" /><div class="fieldDescription">Tier 1: 10000 (≈ 6,5 мин аудио в минута).</div></div>
+                                <h3>Цени (USD)</h3>
+                                <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="PriceGeminiTranscribePerMinute">Разпознаване / минута</label><input id="PriceGeminiTranscribePerMinute" type="number" step="any" is="emby-input" /></div>
+                                <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="PriceGeminiTextInputPerMTok">Превод — вход / 1M токена</label><input id="PriceGeminiTextInputPerMTok" type="number" step="any" is="emby-input" /></div>
+                                <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="PriceGeminiTextOutputPerMTok">Превод — изход / 1M токена</label><input id="PriceGeminiTextOutputPerMTok" type="number" step="any" is="emby-input" /></div>
+                                <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="PriceGeminiTtsInputPerMTok">Глас — текст / 1M токена</label><input id="PriceGeminiTtsInputPerMTok" type="number" step="any" is="emby-input" /></div>
+                                <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="PriceGeminiTtsAudioPerMTok">Глас — аудио / 1M токена (25 токена/с; удвоява се от 01.01.2027)</label><input id="PriceGeminiTtsAudioPerMTok" type="number" step="any" is="emby-input" /></div>
+                            </div>
                         </div>
 
-                        <h3>Лимити на акаунта</h3>
-                        <div class="fieldDescription">Реалните ти лимити: Google AI Studio → Rate limits. Плъгинът темпира заявките по тях и предупреждава преди дневния лимит.</div>
-                        <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="GeminiTtsRequestsPerMinute">Gemini глас — заявки в минута</label><input id="GeminiTtsRequestsPerMinute" type="number" step="any" min="1" is="emby-input" /><div class="fieldDescription">Tier 1: 10.</div></div>
-                        <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="GeminiTtsRequestsPerDay">Gemini глас — заявки на ден</label><input id="GeminiTtsRequestsPerDay" type="number" step="any" min="1" is="emby-input" /><div class="fieldDescription">Tier 1: 100 (нулира се в 03:00 българско време). Филм ≈ 60–70 заявки.</div></div>
-                        <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="GeminiAudioTokensPerMinute">Gemini разпознаване — аудио токени в минута</label><input id="GeminiAudioTokensPerMinute" type="number" step="any" min="1000" is="emby-input" /><div class="fieldDescription">Tier 1: 10000 (≈ 6,5 мин аудио в минута).</div></div>
-                        <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="OpenAiTtsRequestsPerMinute">OpenAI глас — заявки в минута</label><input id="OpenAiTtsRequestsPerMinute" type="number" step="any" min="1" is="emby-input" /></div>
-
-                        <h3>Дублаж — технически</h3>
-                        <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="DubLinesPerRequest">Реплики в една заявка</label><input id="DubLinesPerRequest" type="number" step="any" min="1" max="30" is="emby-input" /><div class="fieldDescription">Разрязват се обратно по паузите и всяка отива на своето време.</div></div>
-                        <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="DubMaxTempo">Максимално ускорение на реплика</label><input id="DubMaxTempo" type="number" step="any" min="1" max="1.5" is="emby-input" /></div>
-                        <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="DubParallelism">Едновременни заявки</label><input id="DubParallelism" type="number" step="any" min="1" max="8" is="emby-input" /></div>
-
-                        <h3>Цени (USD) — за оценките и дневника</h3>
-                        <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="PriceGeminiTranscribePerMinute">Gemini разпознаване / минута</label><input id="PriceGeminiTranscribePerMinute" type="number" step="any" is="emby-input" /></div>
-                        <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="PriceGeminiTextInputPerMTok">Gemini превод — вход / 1M токена</label><input id="PriceGeminiTextInputPerMTok" type="number" step="any" is="emby-input" /></div>
-                        <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="PriceGeminiTextOutputPerMTok">Gemini превод — изход / 1M токена</label><input id="PriceGeminiTextOutputPerMTok" type="number" step="any" is="emby-input" /></div>
-                        <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="PriceGeminiTtsInputPerMTok">Gemini глас — текст / 1M токена</label><input id="PriceGeminiTtsInputPerMTok" type="number" step="any" is="emby-input" /></div>
-                        <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="PriceGeminiTtsAudioPerMTok">Gemini глас — аудио / 1M токена (25 токена/с; удвоява се от 01.01.2027)</label><input id="PriceGeminiTtsAudioPerMTok" type="number" step="any" is="emby-input" /></div>
-                        <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="PriceOpenAiTranscribePerMinute">OpenAI разпознаване / минута</label><input id="PriceOpenAiTranscribePerMinute" type="number" step="any" is="emby-input" /></div>
-                        <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="PriceOpenAiTextInputPerMTok">OpenAI превод — вход / 1M токена</label><input id="PriceOpenAiTextInputPerMTok" type="number" step="any" is="emby-input" /></div>
-                        <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="PriceOpenAiTextOutputPerMTok">OpenAI превод — изход / 1M токена</label><input id="PriceOpenAiTextOutputPerMTok" type="number" step="any" is="emby-input" /></div>
-                        <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="PriceOpenAiTtsPerMinute">OpenAI глас / минута говор (оценка)</label><input id="PriceOpenAiTtsPerMinute" type="number" step="any" is="emby-input" /></div>
+                        <!-- OpenAI -->
+                        <div class="aiSubPanel" data-tab="openai">
+                            <div class="inputContainer">
+                                <label class="inputLabel inputLabelUnfocused" for="OpenAiApiKey">API ключ (platform.openai.com)</label>
+                                <input id="OpenAiApiKey" type="password" is="emby-input" autocomplete="off" />
+                                <div class="fieldDescription" data-key-status="openai"></div>
+                                <div class="fieldDescription">API-то на OpenAI работи с предплатен баланс (Settings → Billing), отделно от ChatGPT абонамента.</div>
+                            </div>
+                            <div data-needs-key="openai">
+                                <h3>Модели</h3>
+                                <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="OpenAiTextModel">Превод</label><select id="OpenAiTextModel" is="emby-select" class="emby-select-withcolor emby-select" data-models="openai.Text"></select></div>
+                                <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="OpenAiTranscribeModel">Разпознаване на говор</label><select id="OpenAiTranscribeModel" is="emby-select" class="emby-select-withcolor emby-select" data-models="openai.Transcribe"></select><div class="fieldDescription">Нужни са времена на репликите — <code>whisper-1</code> ги дава.</div></div>
+                                <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="OpenAiTtsModel">Глас (дублаж)</label><select id="OpenAiTtsModel" is="emby-select" class="emby-select-withcolor emby-select" data-models="openai.Tts"></select></div>
+                                <div class="inputContainer">
+                                    <label class="inputLabel inputLabelUnfocused" for="OpenAiReasoningEffort">„Мислене“ при превод</label>
+                                    <select id="OpenAiReasoningEffort" is="emby-select" class="emby-select-withcolor emby-select">
+                                        <option value="low">low — препоръчано</option>
+                                        <option value="medium">medium</option>
+                                        <option value="high">high</option>
+                                        <option value="">по подразбиране на модела</option>
+                                    </select>
+                                </div>
+                                <h3>Лимити на акаунта</h3>
+                                <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="OpenAiTtsRequestsPerMinute">Глас — заявки в минута</label><input id="OpenAiTtsRequestsPerMinute" type="number" step="any" min="1" is="emby-input" /><div class="fieldDescription">Без дневен лимит; първото платено ниво позволява 2000 в минута.</div></div>
+                                <h3>Цени (USD)</h3>
+                                <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="PriceOpenAiTranscribePerMinute">Разпознаване / минута</label><input id="PriceOpenAiTranscribePerMinute" type="number" step="any" is="emby-input" /></div>
+                                <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="PriceOpenAiTextInputPerMTok">Превод — вход / 1M токена</label><input id="PriceOpenAiTextInputPerMTok" type="number" step="any" is="emby-input" /></div>
+                                <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="PriceOpenAiTextOutputPerMTok">Превод — изход / 1M токена</label><input id="PriceOpenAiTextOutputPerMTok" type="number" step="any" is="emby-input" /></div>
+                                <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="PriceOpenAiTtsPerMinute">Глас / минута говор (оценка)</label><input id="PriceOpenAiTtsPerMinute" type="number" step="any" is="emby-input" /></div>
+                            </div>
+                        </div>
                     </div>
 
                     <div class="aiSaveBar">
@@ -184,28 +207,31 @@
         <script type="text/javascript">
             (function () {
                 var pluginId = '4cad7295-fa8b-46c9-a2e0-b6e5abe8a234';
-                var checks = ['EnableOpenAiTranscription', 'EnableGeminiTranscription', 'EnableOpenAiTranslation', 'EnableGeminiTranslation', 'OnlyWhenNoOtherSubtitles', 'PreferExistingSubtitles', 'UseOtherProvidersAsSource', 'StripHearingImpaired', 'DubSkipSongs'];
-                var texts = ['OpenAiApiKey', 'GeminiApiKey', 'TargetLanguages', 'SourceLanguages', 'TranslationInstructions', 'GeminiThinkingLevel', 'OpenAiReasoningEffort', 'DubProvider', 'DubVoice', 'DubStyle'];
+                var checks = ['CompareProviders', 'OnlyWhenNoOtherSubtitles', 'PreferExistingSubtitles', 'UseOtherProvidersAsSource', 'StripHearingImpaired', 'DubSkipSongs'];
+                var texts = ['OpenAiApiKey', 'GeminiApiKey', 'TargetLanguages', 'SourceLanguages', 'TranslationInstructions', 'GeminiThinkingLevel', 'OpenAiReasoningEffort', 'DubProvider', 'DubVoice', 'DubStyle', 'ActiveTranslator', 'ActiveTranscriber'];
                 var models = ['GeminiTextModel', 'GeminiTranscribeModel', 'GeminiTtsModel', 'OpenAiTextModel', 'OpenAiTranscribeModel', 'OpenAiTtsModel'];
                 var numbers = ['MonthlyBudgetUsd', 'GeminiTtsRequestsPerMinute', 'GeminiTtsRequestsPerDay', 'GeminiAudioTokensPerMinute', 'OpenAiTtsRequestsPerMinute', 'DubLinesPerRequest', 'DubMaxTempo', 'DubParallelism', 'PriceGeminiTranscribePerMinute', 'PriceGeminiTextInputPerMTok', 'PriceGeminiTextOutputPerMTok', 'PriceGeminiTtsInputPerMTok', 'PriceGeminiTtsAudioPerMTok', 'PriceOpenAiTranscribePerMinute', 'PriceOpenAiTextInputPerMTok', 'PriceOpenAiTextOutputPerMTok', 'PriceOpenAiTtsPerMinute'];
+                var integers = ['GeminiTtsRequestsPerMinute', 'GeminiTtsRequestsPerDay', 'GeminiAudioTokensPerMinute', 'OpenAiTtsRequestsPerMinute', 'DubLinesPerRequest', 'DubParallelism'];
                 var page = document.querySelector('#AiTranslateConfigPage');
-                var providers = [];
-                var savedConfig = null;
-                var modelLists = null;
+                var savedConfig = null, modelLists = null, keyInfo = [], voiceProviders = [];
 
                 function $(id) { return page.querySelector('#' + id); }
                 function esc(s) { var d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
-                function api(method, path) {
-                    return ApiClient.ajax({ type: method, url: ApiClient.getUrl(path), dataType: method === 'GET' ? 'json' : undefined });
-                }
+                function api(method, path) { return ApiClient.ajax({ type: method, url: ApiClient.getUrl(path), dataType: method === 'GET' ? 'json' : undefined }); }
 
-                // --- tabs ---
-                function showTab(name) {
-                    page.querySelectorAll('.aiTab').forEach(function (t) { t.classList.toggle('active', t.getAttribute('data-tab') === name); });
-                    page.querySelectorAll('.aiPanel').forEach(function (p) { p.classList.toggle('active', p.getAttribute('data-tab') === name); });
-                    try { sessionStorage.setItem('aiTranslateTab', name); } catch (e) { }
+                // --- tabs and sub-tabs ---
+                function showTab(group, name) {
+                    var bar = page.querySelector('.aiTabs[data-group="' + group + '"]');
+                    if (!bar || !bar.querySelector('[data-tab="' + name + '"]')) { return; }
+                    bar.querySelectorAll('.aiTab').forEach(function (t) { t.classList.toggle('active', t.getAttribute('data-tab') === name); });
+                    var panels = group === 'main' ? page.querySelectorAll('.aiPanel') : page.querySelectorAll('.aiSubPanel');
+                    panels.forEach(function (p) { p.classList.toggle('active', p.getAttribute('data-tab') === name); });
+                    try { sessionStorage.setItem('aiTranslateTab.' + group, name); } catch (e) { }
                 }
-                page.querySelectorAll('.aiTab').forEach(function (t) { t.addEventListener('click', function () { showTab(t.getAttribute('data-tab')); }); });
+                page.querySelectorAll('.aiTabs').forEach(function (bar) {
+                    var group = bar.getAttribute('data-group');
+                    bar.querySelectorAll('.aiTab').forEach(function (t) { t.addEventListener('click', function () { showTab(group, t.getAttribute('data-tab')); }); });
+                });
 
                 // --- status ---
                 function loadStatus() {
@@ -215,10 +241,36 @@
                             html += '<br>' + esc(p.Name) + ': $' + p.CostUsd.toFixed(3) + (p.Minutes ? ' · ' + p.Minutes.toFixed(1) + ' мин аудио' : '') + (p.InputTokens ? ' · ' + p.InputTokens + ' вх. / ' + p.OutputTokens + ' изх. токена' : '');
                         });
                         (s.Running || []).forEach(function (j) {
-                            html += '<br>' + (j.Stage.indexOf('грешка') === 0 ? '⚠ ' : '⏳ ') + esc(j.Title) + ' → ' + esc(j.TargetLanguage) + ': ' + esc(j.Stage);
+                            html += '<br>' + (j.Stage.indexOf('грешка') === 0 ? '⚠ ' : '⏳ ') + esc(j.Title) + ' → ' + esc(j.TargetLanguage) + ' (' + esc(j.Combination) + '): ' + esc(j.Stage);
                         });
                         $('aiStatus').innerHTML = html;
                     });
+                }
+
+                // --- providers: key status, active-provider selects (only working keys) ---
+                function applyKeyInfo() {
+                    keyInfo.forEach(function (p) {
+                        var badge = page.querySelector('[data-key-badge="' + p.Id + '"]');
+                        var status = page.querySelector('[data-key-status="' + p.Id + '"]');
+                        var area = page.querySelector('[data-needs-key="' + p.Id + '"]');
+                        if (badge) { badge.innerHTML = p.KeyOk ? '<span class="aiOk">●</span>' : (p.HasKey ? '<span class="aiWarn">●</span>' : ''); }
+                        if (status) {
+                            status.innerHTML = p.KeyOk ? '<span class="aiOk">✓ Ключът работи</span> · ' + p.Models + ' модела достъпни'
+                                : p.HasKey ? '<span class="aiWarn">✗ Ключът не работи: ' + esc(p.Error || '') + '</span>' : 'Няма ключ — доставчикът не може да се избира.';
+                        }
+                        if (area) { area.classList.toggle('aiOff', !p.KeyOk); }
+                    });
+                    page.querySelectorAll('[data-provider-select]').forEach(function (sel) {
+                        var current = savedConfig ? savedConfig[sel.id] : sel.value;
+                        var ok = keyInfo.filter(function (p) { return p.KeyOk; });
+                        sel.innerHTML = ok.length ? ok.map(function (p) { return '<option value="' + esc(p.Id) + '">' + esc(p.Name) + '</option>'; }).join('')
+                            : '<option value="">— няма доставчик с работещ ключ —</option>';
+                        if (ok.some(function (p) { return p.Id === current; })) { sel.value = current; }
+                    });
+                }
+
+                function loadProviders() {
+                    return api('GET', 'AiTranslate/Providers').then(function (list) { keyInfo = list || []; applyKeyInfo(); }, function () { keyInfo = []; applyKeyInfo(); });
                 }
 
                 // --- model drop-downs from the providers' current lists ---
@@ -230,33 +282,32 @@
                     var current = savedConfig ? savedConfig[id] : '';
                     var options = list.slice();
                     if (current && options.indexOf(current) < 0) { options.unshift(current); }
-                    sel.innerHTML = options.map(function (m) {
-                        return '<option value="' + esc(m) + '">' + esc(m) + (list.indexOf(m) < 0 ? ' (не е в списъка на акаунта)' : '') + '</option>';
-                    }).join('');
+                    sel.innerHTML = options.map(function (m) { return '<option value="' + esc(m) + '">' + esc(m) + (list.length && list.indexOf(m) < 0 ? ' (не е в списъка на акаунта)' : '') + '</option>'; }).join('');
                     if (current) { sel.value = current; }
                 }
-
                 function loadModels() {
-                    api('GET', 'AiTranslate/Models').then(function (m) {
-                        modelLists = m;
-                        models.forEach(fillModelSelect);
-                        var info = [];
-                        info.push('Google: ' + (m.Gemini.Error ? esc(m.Gemini.Error) : (m.Gemini.Text.length + m.Gemini.Transcribe.length + m.Gemini.Tts.length) + ' модела'));
-                        info.push('OpenAI: ' + (m.OpenAi.Error ? esc(m.OpenAi.Error) : (m.OpenAi.Text.length + m.OpenAi.Transcribe.length + m.OpenAi.Tts.length) + ' модела'));
-                        $('modelsInfo').innerHTML = 'Актуални модели от акаунтите ти — ' + info.join(' · ') + '.';
-                    }, function () { $('modelsInfo').textContent = 'Списъкът с модели не можа да се зареди.'; models.forEach(fillModelSelect); });
+                    api('GET', 'AiTranslate/Models').then(function (m) { modelLists = m; models.forEach(fillModelSelect); }, function () { models.forEach(fillModelSelect); });
                 }
 
                 // --- voice-over ---
                 function fillVoices() {
-                    var p = providers.filter(function (x) { return x.Id === $('DubProvider').value; })[0];
+                    var p = voiceProviders.filter(function (x) { return x.Id === $('DubProvider').value; })[0];
                     var sel = $('DubVoice');
                     var current = sel.value || (savedConfig && savedConfig.DubVoice) || '';
                     sel.innerHTML = p ? p.Voices.map(function (v) { return '<option value="' + esc(v.Id) + '">' + esc(v.Id) + ' — ' + esc(v.Description) + '</option>'; }).join('') : '';
                     var match = p ? p.Voices.filter(function (v) { return v.Id.toLowerCase() === String(current).toLowerCase(); })[0] : null;
                     if (match) { sel.value = match.Id; }
-                    $('dubQuota').innerHTML = !p ? 'Въведи API ключ за Gemini или OpenAI (таб „Ключове и разходи“).' :
+                    $('dubQuota').innerHTML = !p ? 'Въведи работещ API ключ в таб „Доставчици“.' :
                         p.RequestsPerDay ? ('Днес: <b>' + p.UsedToday + ' / ' + p.RequestsPerDay + '</b> заявки (нулира се в 03:00). ~10 реплики на заявка → ~1 филм на ден.') : 'Без дневен лимит.';
+                }
+                function loadVoiceProviders() {
+                    return api('GET', 'AiTranslate/Dub/Providers').then(function (list) {
+                        voiceProviders = list || [];
+                        var current = $('DubProvider').value || (savedConfig && savedConfig.DubProvider);
+                        $('DubProvider').innerHTML = voiceProviders.length ? voiceProviders.map(function (p) { return '<option value="' + esc(p.Id) + '">' + esc(p.Name) + '</option>'; }).join('') : '<option value="">— няма доставчик с ключ —</option>';
+                        if (voiceProviders.some(function (p) { return p.Id === current; })) { $('DubProvider').value = current; }
+                        fillVoices();
+                    });
                 }
 
                 function dubSearch() {
@@ -288,7 +339,7 @@
                             ' <button is="emby-button" type="button" class="raised button-submit emby-button dubGo"><span>Озвучи · ' + esc(e.Provider) + ' · ' + esc(e.Voice) + '</span></button>';
                         info.querySelector('.dubGo').addEventListener('click', function () {
                             api('POST', 'AiTranslate/Dub/Start?language=bg&itemId=' + id + '&provider=' + encodeURIComponent(provider) + '&voice=' + encodeURIComponent(e.Voice)).then(function () {
-                                info.innerHTML = '⏳ стартирано — виж „Този месец“ в първия таб';
+                                info.innerHTML = '⏳ стартирано — прогресът е в таб „Разходи“';
                                 loadStatus();
                             }, function (r) {
                                 (r && r.text ? r.text() : Promise.resolve('не стартира')).then(function (t) { info.innerHTML = '<span class="aiWarn">' + esc(t) + '</span>'; });
@@ -304,20 +355,23 @@
                 // --- load / save ---
                 var timer = null;
                 page.addEventListener('pageshow', function () {
-                    try { showTab(sessionStorage.getItem('aiTranslateTab') || 'keys'); } catch (e) { showTab('keys'); }
+                    try {
+                        showTab('main', sessionStorage.getItem('aiTranslateTab.main') || 'costs');
+                        showTab('provider', sessionStorage.getItem('aiTranslateTab.provider') || 'gemini');
+                    } catch (e) { }
                     Dashboard.showLoadingMsg();
-                    Promise.all([ApiClient.getPluginConfiguration(pluginId), api('GET', 'AiTranslate/Dub/Providers')]).then(function (r) {
-                        savedConfig = r[0];
-                        providers = r[1] || [];
-                        checks.forEach(function (k) { $(k).checked = !!savedConfig[k]; });
-                        numbers.forEach(function (k) { $(k).value = savedConfig[k] == null ? '' : savedConfig[k]; });
-                        $('DubProvider').innerHTML = providers.map(function (p) { return '<option value="' + esc(p.Id) + '">' + esc(p.Name) + '</option>'; }).join('');
-                        texts.forEach(function (k) { if (k !== 'DubVoice' && k !== 'DubProvider') { $(k).value = savedConfig[k] == null ? '' : savedConfig[k]; } });
-                        $('DubProvider').value = providers.some(function (p) { return p.Id === savedConfig.DubProvider; }) ? savedConfig.DubProvider : (providers[0] ? providers[0].Id : '');
-                        $('DubVoice').value = '';
-                        fillVoices();
+                    ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+                        savedConfig = config;
+                        checks.forEach(function (k) { $(k).checked = !!config[k]; });
+                        numbers.forEach(function (k) { $(k).value = config[k] == null ? '' : config[k]; });
+                        texts.forEach(function (k) {
+                            var el = $(k);
+                            if (el.tagName !== 'SELECT' || ['GeminiThinkingLevel', 'OpenAiReasoningEffort'].indexOf(k) >= 0) { el.value = config[k] == null ? '' : config[k]; }
+                        });
                         models.forEach(fillModelSelect);
                         Dashboard.hideLoadingMsg();
+                        loadProviders();
+                        loadVoiceProviders();
                         loadModels();
                     }, function () { Dashboard.hideLoadingMsg(); });
                     loadStatus();
@@ -330,24 +384,24 @@
                     Dashboard.showLoadingMsg();
                     ApiClient.getPluginConfiguration(pluginId).then(function (config) {
                         checks.forEach(function (k) { config[k] = $(k).checked; });
-                        texts.forEach(function (k) { config[k] = ($(k).value || '').trim(); });
-                        models.forEach(function (k) { if ($(k).value) { config[k] = $(k).value; } });
-                        numbers.forEach(function (k) {
-                            var v = parseFloat(String($(k).value).replace(',', '.'));
-                            if (!isNaN(v)) { config[k] = v; }
+                        texts.forEach(function (k) {
+                            var v = ($(k).value || '').trim();
+                            // An empty provider select (no working key) keeps the stored choice.
+                            if (v || ['ActiveTranslator', 'ActiveTranscriber', 'DubProvider', 'DubVoice'].indexOf(k) < 0) { config[k] = v; }
                         });
-                        ['GeminiTtsRequestsPerMinute', 'GeminiTtsRequestsPerDay', 'GeminiAudioTokensPerMinute', 'OpenAiTtsRequestsPerMinute', 'DubLinesPerRequest', 'DubParallelism']
-                            .forEach(function (k) { config[k] = Math.max(1, Math.round(config[k])); });
+                        models.forEach(function (k) { if ($(k).value) { config[k] = $(k).value; } });
+                        numbers.forEach(function (k) { var v = parseFloat(String($(k).value).replace(',', '.')); if (!isNaN(v)) { config[k] = v; } });
+                        integers.forEach(function (k) { config[k] = Math.max(1, Math.round(config[k])); });
                         return ApiClient.updatePluginConfiguration(pluginId, config);
                     }).then(function (result) {
                         Dashboard.processPluginConfigurationUpdateResult(result);
-                        return Promise.all([ApiClient.getPluginConfiguration(pluginId), api('GET', 'AiTranslate/Dub/Providers')]);
-                    }).then(function (r) {
-                        savedConfig = r[0];
-                        providers = r[1] || [];
-                        fillVoices();
-                        loadStatus();
+                        return ApiClient.getPluginConfiguration(pluginId);
+                    }).then(function (config) {
+                        savedConfig = config;
+                        loadProviders();
+                        loadVoiceProviders();
                         loadModels();
+                        loadStatus();
                     }, function (err) {
                         Dashboard.hideLoadingMsg();
                         Dashboard.alert({ message: 'Настройките не се записаха: ' + (err && err.status ? 'HTTP ' + err.status : 'грешка') });
