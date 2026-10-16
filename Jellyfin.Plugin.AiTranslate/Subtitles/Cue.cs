@@ -54,9 +54,89 @@ public static partial class CueTools
         return result;
     }
 
-    /// <summary>Groups a word stream into cues, breaking at pauses, sentence ends and length limits.</summary>
-    public static List<Cue> GroupWords(IReadOnlyList<TimedWord> words)
+    /// <summary>
+    /// Fixes impossible word timings before grouping: words longer than 3 s are shortened, and words whose time jumps
+    /// ahead of the following words are re-timed in spoken order (see <see cref="RetimeInOrder"/>).
+    /// </summary>
+    public static List<TimedWord> SanitizeWords(IReadOnlyList<TimedWord> words)
     {
+        var times = RetimeInOrder(
+            words.Select(w => (w.Start, w.End, w.Text.Length)).ToList(),
+            _ => TimeSpan.FromSeconds(3),
+            len => TimeSpan.FromSeconds(Math.Clamp((0.08 * len) + 0.12, 0.2, 1.5)));
+        return words.Select((w, i) => new TimedWord(times[i].Start, times[i].End, w.Text)).ToList();
+    }
+
+    /// <summary>
+    /// Keeps the items in the order they were recognised (the spoken order) and repairs their times:
+    /// an item that starts more than 1 s after one of the next three is "displaced"; every run of displaced items is
+    /// spread, by text length, over the gap between the surrounding good items. Good items longer than allowed are
+    /// shortened to their natural length.
+    /// </summary>
+    internal static List<(TimeSpan Start, TimeSpan End)> RetimeInOrder(
+        IReadOnlyList<(TimeSpan Start, TimeSpan End, int Length)> items,
+        Func<int, TimeSpan> maxDuration,
+        Func<int, TimeSpan> natural)
+    {
+        int n = items.Count;
+        var result = items.Select(x => (x.Start, x.End)).ToList();
+        var displaced = new bool[n];
+        for (int i = 0; i < n; i++)
+        {
+            displaced[i] = Enumerable.Range(i + 1, Math.Min(3, n - i - 1)).Any(j => items[j].Start + TimeSpan.FromSeconds(1) < items[i].Start);
+            if (!displaced[i] && (items[i].End < items[i].Start || items[i].End - items[i].Start > maxDuration(items[i].Length)))
+            {
+                result[i] = (items[i].Start, items[i].Start + natural(items[i].Length));
+            }
+        }
+
+        for (int i = 0; i < n; i++)
+        {
+            if (!displaced[i])
+            {
+                continue;
+            }
+
+            int runEnd = i;
+            while (runEnd + 1 < n && displaced[runEnd + 1])
+            {
+                runEnd++;
+            }
+
+            var run = Enumerable.Range(i, runEnd - i + 1).ToList();
+            var naturalTotal = TimeSpan.FromTicks(run.Sum(k => natural(items[k].Length).Ticks));
+            var windowStart = i > 0 ? result[i - 1].End : (runEnd + 1 < n ? result[runEnd + 1].Start - naturalTotal : items[i].Start);
+            var windowEnd = runEnd + 1 < n ? result[runEnd + 1].Start : windowStart + naturalTotal;
+            var minimum = TimeSpan.FromMilliseconds(300 * run.Count);
+            if (windowEnd - windowStart < minimum)
+            {
+                windowEnd = windowStart + minimum;
+            }
+
+            if (windowEnd - windowStart > naturalTotal * 1.5)
+            {
+                windowEnd = windowStart + (naturalTotal * 1.5);
+            }
+
+            double totalLength = Math.Max(1, run.Sum(k => items[k].Length));
+            var cursor = windowStart;
+            foreach (int k in run)
+            {
+                var span = TimeSpan.FromTicks((long)((windowEnd - windowStart).Ticks * (Math.Max(1, items[k].Length) / totalLength)));
+                result[k] = (cursor, cursor + span);
+                cursor += span;
+            }
+
+            i = runEnd;
+        }
+
+        return result;
+    }
+
+    /// <summary>Groups a word stream into cues, breaking at pauses, sentence ends and length limits.</summary>
+    public static List<Cue> GroupWords(IReadOnlyList<TimedWord> rawWords)
+    {
+        var words = SanitizeWords(rawWords);
         var result = new List<Cue>();
         var current = new List<TimedWord>();
 
@@ -96,8 +176,65 @@ public static partial class CueTools
         }
 
         Flush();
-        return result;
+        return Repair(result);
     }
+
+    /// <summary>
+    /// Repairs broken timings (seen with Gemini word timestamps: single words lasting 270 s or jumping minutes ahead):
+    /// a cue that starts later than one of the next three is moved right after its predecessor, cues are sorted,
+    /// durations are capped (7 s or reading time), overlaps removed, and fragments of one sentence re-joined.
+    /// </summary>
+    public static List<Cue> Repair(IReadOnlyList<Cue> input, bool joinFragments = true)
+    {
+        var source = input.Where(c => !string.IsNullOrWhiteSpace(c.Text)).ToList();
+        var times = RetimeInOrder(
+            source.Select(c => (c.Start, c.End, c.Text.Replace("\n", string.Empty, StringComparison.Ordinal).Length)).ToList(),
+            len => Max(MaxCueDuration, TimeSpan.FromSeconds(len / 15.0)),
+            len => Max(TimeSpan.FromSeconds(1), Min(MaxCueDuration, TimeSpan.FromSeconds(len / 15.0))));
+        var cues = source.Select((c, i) => c with { Start = times[i].Start, End = times[i].End }).ToList();
+
+        // Re-join fragments of one sentence ("Ако пак" + "се навърташ" + "около" …).
+        var joined = new List<Cue>();
+        foreach (var c in cues)
+        {
+            if (joined.Count > 0)
+            {
+                var last = joined[^1];
+                string lastFlat = last.Text.Replace('\n', ' ');
+                if (joinFragments
+                    && !SentenceEndRegex().IsMatch(lastFlat.TrimEnd('"', '“', '”', ' '))
+                    && !c.Text.TrimStart().StartsWith('-')
+                    && c.Start - last.End < TimeSpan.FromMilliseconds(600)
+                    && lastFlat.Length + c.Text.Length + 1 <= MaxCueLength
+                    && c.End - last.Start <= MaxCueDuration)
+                {
+                    joined[^1] = new Cue(last.Start, Max(last.End, c.End), Wrap(lastFlat + " " + c.Text.Replace('\n', ' ')));
+                    continue;
+                }
+            }
+
+            joined.Add(c);
+        }
+
+        // No overlaps: end each cue just before the next one starts.
+        for (int i = 0; i + 1 < joined.Count; i++)
+        {
+            var limit = joined[i + 1].Start - TimeSpan.FromMilliseconds(50);
+            if (joined[i].End > limit)
+            {
+                joined[i] = joined[i] with { End = Max(joined[i].Start + TimeSpan.FromMilliseconds(300), limit) };
+            }
+        }
+
+        return joined;
+    }
+
+    /// <summary>Reading time at ~15 characters per second, at least one second.</summary>
+    public static TimeSpan ReadingTime(string text) => TimeSpan.FromSeconds(Math.Max(1.0, text.Replace("\n", string.Empty, StringComparison.Ordinal).Length / 15.0));
+
+    private static TimeSpan Max(TimeSpan a, TimeSpan b) => a > b ? a : b;
+
+    private static TimeSpan Min(TimeSpan a, TimeSpan b) => a < b ? a : b;
 
     /// <summary>
     /// Final pass: re-wraps every cue and stretches cues that are too short to read (20 characters per second, at least

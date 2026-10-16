@@ -248,3 +248,58 @@ public class MiscTests
         }
     }
 }
+
+public class RepairTests
+{
+    private static Cue C(double s, double e, string t) => new(TimeSpan.FromSeconds(s), TimeSpan.FromSeconds(e), t);
+
+    [Fact]
+    public void FixesThePinocchioChunkBoundaryCase()
+    {
+        // Real output (Gemini word timestamps went wrong after 1440 s): one-word cues lasting minutes, out of order.
+        var broken = new[]
+        {
+            C(1437.2, 1438.2, "Махай се от мен."),
+            C(1442.3, 1442.7, "Ако пак"),
+            C(1442.7, 1712.8, "се навърташ"),
+            C(1712.8, 1732.9, "около"),
+            C(1732.9, 1743.2, "този"),
+            C(1743.2, 1743.7, "храм,"),
+            C(1444.3, 1445.3, "ще те убия."),
+            C(1447.0, 2147.1, "Какво,"),
+            C(2147.1, 2157.2, "по дяволите,"),
+            C(1451.2, 1452.2, "Всичките."),
+        };
+
+        var fixedCues = CueTools.Repair(broken);
+
+        Assert.All(fixedCues, c => Assert.InRange((c.End - c.Start).TotalSeconds, 0.29, 7.0));
+        for (int i = 1; i < fixedCues.Count; i++)
+        {
+            Assert.True(fixedCues[i - 1].End <= fixedCues[i].Start, $"overlap at {i}");
+        }
+
+        Assert.All(fixedCues, c => Assert.InRange(c.Start.TotalSeconds, 1437, 1460));
+
+        // Spoken order is kept: the sentence comes back whole, "ще те убия." after "този храм,".
+        Assert.Contains(fixedCues, c => c.Text.Replace('\n', ' ') == "Ако пак се навърташ около този храм, ще те убия.");
+        Assert.Equal("Всичките.", fixedCues[^1].Text);
+    }
+
+    [Fact]
+    public void LeavesGoodHumanSubtitlesAlone()
+    {
+        var good = new[] { C(1, 3, "Обичам те със всеки дъх,"), C(3.1, 5, "усмивки, сълзи на целия ми живот."), C(6, 8, "Добре.") };
+        Assert.Equal(good, CueTools.Repair(good, joinFragments: false));
+    }
+
+    [Fact]
+    public void SanitizesWordsBeforeGrouping()
+    {
+        TimedWord W(double s, double e, string t) => new(TimeSpan.FromSeconds(s), TimeSpan.FromSeconds(e), t);
+        var cues = CueTools.GroupWords([W(10, 10.3, "Ако"), W(10.3, 10.5, "пак"), W(10.6, 280, "се"), W(280, 300, "навърташ"), W(11.5, 11.9, "тук."), W(12.5, 13, "Махай"), W(13, 13.4, "се!")]);
+        Assert.All(cues, c => Assert.True((c.End - c.Start).TotalSeconds <= 7));
+        Assert.StartsWith("Ако пак се навърташ тук.", cues[0].Text.Replace('\n', ' '), StringComparison.Ordinal);
+        Assert.InRange(cues[^1].End.TotalSeconds, 12, 15);
+    }
+}

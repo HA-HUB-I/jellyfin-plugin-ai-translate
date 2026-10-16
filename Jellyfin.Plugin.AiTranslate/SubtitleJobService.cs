@@ -269,7 +269,7 @@ public sealed class SubtitleJobService
         }
 
         Directory.CreateDirectory(Path.GetDirectoryName(output)!);
-        CueTools.WriteSrt(output, CueTools.Polish(result));
+        CueTools.WriteSrt(output, CueTools.Polish(CueTools.Repair(result, joinFragments: fromAudio)));
         _logger.LogInformation("AI Translate: {Title} → {Lang}: {Count} subtitles ({Combination})", job.Title, job.TargetLanguage, result.Count, label);
         return output;
     }
@@ -331,7 +331,7 @@ public sealed class SubtitleJobService
         if (File.Exists(path))
         {
             var cached = JsonSerializer.Deserialize<CachedTranscript>(await File.ReadAllTextAsync(path).ConfigureAwait(false))!;
-            return (CueTools.ParseSrt(cached.Srt), cached.Language);
+            return (CueTools.Repair(CueTools.ParseSrt(cached.Srt)), cached.Language);
         }
 
         var work = Path.Combine(_appPaths.TempDirectory, "ai-translate", Guid.NewGuid().ToString("N"));
