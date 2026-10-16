@@ -6,8 +6,8 @@ using Jellyfin.Plugin.AiTranslate.Subtitles;
 
 namespace Jellyfin.Plugin.AiTranslate.Dubbing;
 
-/// <summary>A piece of narration: spoken text and the time slot it belongs to.</summary>
-public sealed record DubSegment(TimeSpan Start, TimeSpan End, string Text);
+/// <summary>A piece of narration: spoken text, the time slot it belongs to and the speaker's voice class.</summary>
+public sealed record DubSegment(TimeSpan Start, TimeSpan End, string Text, VoiceKind Kind = VoiceKind.Unknown);
 
 /// <summary>A segment placed on the timeline after synthesis (Tempo &gt; 1 = sped up).</summary>
 public sealed record PlacedClip(TimeSpan Start, TimeSpan Duration, double Tempo);
@@ -27,9 +27,16 @@ public static partial class DubPlanner
     private const int MaxSegmentChars = 170;
 
     /// <summary>Cleans cue text for speaking and joins neighbouring short cues into one request.</summary>
-    public static List<DubSegment> Plan(IReadOnlyList<Cue> cues, bool skipSongs)
+    public static List<DubSegment> Plan(IReadOnlyList<Cue> cues, bool skipSongs) => Plan(cues, skipSongs, null);
+
+    /// <summary>
+    /// Cleans cue text for speaking. With <paramref name="classify"/>, two-speaker cues ("- A\n- B") are split into one
+    /// line per speaker (time shared by text length), every line gets a voice class, and only neighbours with the same
+    /// class are joined.
+    /// </summary>
+    public static List<DubSegment> Plan(IReadOnlyList<Cue> cues, bool skipSongs, Func<TimeSpan, TimeSpan, VoiceKind>? classify)
     {
-        var segments = new List<DubSegment>();
+        var lines = new List<DubSegment>();
         foreach (var cue in cues)
         {
             if (skipSongs && IsSongOnly(cue.Text))
@@ -37,26 +44,49 @@ public static partial class DubPlanner
                 continue;
             }
 
-            string text = Speakable(cue.Text);
-            if (text.Length == 0)
+            var parts = classify is null ? [cue.Text] : SpeakerParts(cue.Text);
+            var spoken = parts.Select(Speakable).Where(t => t.Length > 0).ToList();
+            double total = spoken.Sum(t => t.Length);
+            var start = cue.Start;
+            for (int i = 0; i < spoken.Count; i++)
             {
-                continue;
+                var end = i == spoken.Count - 1 ? cue.End : start + TimeSpan.FromTicks((long)((cue.End - cue.Start).Ticks * (spoken[i].Length / total)));
+                lines.Add(new DubSegment(start, end, spoken[i]));
+                start = end;
             }
+        }
 
+        if (classify is not null)
+        {
+            var kinds = VoicePitch.FillUnknown(lines.Select(l => classify(l.Start, l.End)).ToList());
+            lines = lines.Select((l, i) => l with { Kind = kinds[i] }).ToList();
+        }
+
+        var segments = new List<DubSegment>();
+        foreach (var line in lines)
+        {
             if (segments.Count > 0)
             {
                 var last = segments[^1];
-                if (cue.Start - last.End <= MergeGap && cue.End - last.Start <= MaxSegment && last.Text.Length + text.Length < MaxSegmentChars)
+                if (last.Kind == line.Kind && line.Start - last.End <= MergeGap && line.End - last.Start <= MaxSegment && last.Text.Length + line.Text.Length < MaxSegmentChars)
                 {
-                    segments[^1] = new DubSegment(last.Start, cue.End, last.Text + " " + text);
+                    segments[^1] = last with { End = line.End, Text = last.Text + " " + line.Text };
                     continue;
                 }
             }
 
-            segments.Add(new DubSegment(cue.Start, cue.End, text));
+            segments.Add(line);
         }
 
         return segments;
+    }
+
+    /// <summary>Splits "A\n- B", "- A\n- B" and "- A - B" into one string per speaker.</summary>
+    internal static List<string> SpeakerParts(string text)
+    {
+        var normalized = CueTools.WrapKeepingSpeakers(TagRegex().Replace(text, string.Empty));
+        var lines = normalized.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return lines.Length > 1 && lines.Skip(1).All(l => l.StartsWith('-')) ? lines.ToList() : [text];
     }
 
     /// <summary>

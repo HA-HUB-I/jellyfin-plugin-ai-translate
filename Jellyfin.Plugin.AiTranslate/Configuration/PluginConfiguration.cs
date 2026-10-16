@@ -123,6 +123,18 @@ public class PluginConfiguration : BasePluginConfiguration
     /// <summary>Gets or sets the prebuilt voice (Charon, Kore, Puck, Zephyr, …).</summary>
     public string DubVoice { get; set; } = "Charon";
 
+    /// <summary>Gets or sets a value indicating whether lines get a male or female voice by the pitch of the original speaker.</summary>
+    public bool DubSplitByGender { get; set; } = true;
+
+    /// <summary>Gets or sets the voice for women's lines (DubVoice is used for men and when undecided).</summary>
+    public string DubVoiceFemale { get; set; } = "Kore";
+
+    /// <summary>Gets or sets the pitch below which a speaker counts as male (Hz).</summary>
+    public double DubMaleBelowHz { get; set; } = 165;
+
+    /// <summary>Gets or sets the pitch above which a speaker counts as female (Hz).</summary>
+    public double DubFemaleAboveHz { get; set; } = 185;
+
     /// <summary>Gets or sets the delivery style sent with every line.</summary>
     public string DubStyle { get; set; } = "calm Bulgarian TV voice-over narrator, neutral and clear, slightly fast";
 

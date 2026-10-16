@@ -107,6 +107,19 @@ public sealed class DubService
         return tts.Voices[0].Id;
     }
 
+    /// <summary>The configured female voice if the provider has it, otherwise the provider's first female voice.</summary>
+    public static string GetFemaleVoice(ITtsProvider tts, string? voice)
+    {
+        var match = tts.Voices.FirstOrDefault(x => string.Equals(x.Id, voice, StringComparison.OrdinalIgnoreCase));
+        if (match.Id is not null)
+        {
+            return match.Id;
+        }
+
+        var female = tts.Voices.FirstOrDefault(x => x.Description.StartsWith("женски", StringComparison.Ordinal));
+        return female.Id ?? tts.Voices[0].Id;
+    }
+
     private static string QuotaKey(ITtsProvider tts, PluginConfiguration config) => tts.Id + ":" + tts.Model(config);
 
     private static PluginConfiguration Config => Plugin.Instance?.Configuration ?? new PluginConfiguration();
@@ -133,8 +146,12 @@ public sealed class DubService
         voice = GetVoice(tts, voice);
         var video = GetVideo(itemId);
         var stream = FindSubtitle(video, language) ?? throw new InvalidOperationException("Няма текстови субтитри на " + language);
+        // Without the (slow) voice analysis: every line counted once with the main voice — close enough for a price.
         var segments = DubPlanner.Plan(await ReadSubtitleAsync(video, stream, cancellationToken).ConfigureAwait(false), config.DubSkipSongs);
-        var missing = Enumerable.Range(0, segments.Count).Where(i => !File.Exists(ClipPath(video, tts, voice, config, segments[i].Text))).ToList();
+        string femaleVoice = config.DubSplitByGender ? GetFemaleVoice(tts, config.DubVoiceFemale) : voice;
+        var missing = Enumerable.Range(0, segments.Count)
+            .Where(i => !File.Exists(ClipPath(video, tts, voice, config, segments[i].Text)) && !File.Exists(ClipPath(video, tts, femaleVoice, config, segments[i].Text)))
+            .ToList();
         int chars = missing.Sum(i => segments[i].Text.Length);
         double seconds = segments.Sum(s => s.Text.Length) / DubPlanner.CharactersPerSecond;
         double cost = tts.Estimate(chars, chars / DubPlanner.CharactersPerSecond, config);
@@ -209,12 +226,20 @@ public sealed class DubService
     {
         var config = Config;
         var started = DateTime.UtcNow;
-        string label = $"{tts.DisplayName(config)} · {voice}";
+        bool byGender = config.DubSplitByGender;
+        string femaleVoice = byGender ? GetFemaleVoice(tts, config.DubVoiceFemale) : voice;
+        string label = byGender ? $"{tts.DisplayName(config)} · {voice} / {femaleVoice}" : $"{tts.DisplayName(config)} · {voice}";
         void Stage(string s) => _status[video.Id] = new JobStatus(video.Name, language, label, s, started);
+        string VoiceFor(DubSegment s) => byGender && s.Kind == VoiceKind.Female ? femaleVoice : voice;
 
         var stream = FindSubtitle(video, language) ?? throw new InvalidOperationException("Няма текстови субтитри на " + language);
         Stage("четене на субтитрите");
-        var segments = DubPlanner.Plan(await ReadSubtitleAsync(video, stream, CancellationToken.None).ConfigureAwait(false), config.DubSkipSongs);
+        var cues = await ReadSubtitleAsync(video, stream, CancellationToken.None).ConfigureAwait(false);
+        var extractor = new AudioExtractor(_mediaEncoder.EncoderPath, _mediaEncoder.ProbePath);
+        int audioIndex = await extractor.GetDefaultAudioIndexAsync(video.Path, CancellationToken.None).ConfigureAwait(false);
+        var segments = byGender
+            ? await PlanByGenderAsync(video, cues, audioIndex, config, Stage).ConfigureAwait(false)
+            : DubPlanner.Plan(cues, config.DubSkipSongs);
 
         // 1) Speech for every segment (cached on disk per line, so an interrupted run resumes for free).
         //    Several lines go into one request (TTS quotas count requests) and are split again at the pauses.
@@ -224,7 +249,7 @@ public sealed class DubService
         var missing = new List<int>();
         for (int i = 0; i < segments.Count; i++)
         {
-            string cache = ClipPath(video, tts, voice, config, segments[i].Text);
+            string cache = ClipPath(video, tts, VoiceFor(segments[i]), config, segments[i].Text);
             if (File.Exists(cache))
             {
                 (clips[i], rate) = Wav.ReadPcm16Mono(await File.ReadAllBytesAsync(cache).ConfigureAwait(false));
@@ -261,7 +286,8 @@ public sealed class DubService
                 async (batch, ct) =>
                 {
                     string text = string.Join(tts.LineSeparator(config), batch.Select(i => segments[i].Text));
-                    var clip = await tts.SynthesizeAsync(text, voice, config.DubStyle, config, ct).ConfigureAwait(false);
+                    string batchVoice = VoiceFor(segments[batch[0]]);
+                    var clip = await tts.SynthesizeAsync(text, batchVoice, config.DubStyle, config, ct).ConfigureAwait(false);
                     Quota.Add(quotaKey, 1, DateTime.UtcNow);
                     usage.Add(clip.Usage);
                     rate = clip.SampleRate;
@@ -269,7 +295,7 @@ public sealed class DubService
                     for (int k = 0; k < batch.Count; k++)
                     {
                         clips[batch[k]] = pieces[k];
-                        string cache = ClipPath(video, tts, voice, config, segments[batch[k]].Text);
+                        string cache = ClipPath(video, tts, batchVoice, config, segments[batch[k]].Text);
                         Directory.CreateDirectory(Path.GetDirectoryName(cache)!);
                         await File.WriteAllBytesAsync(cache, Wav.WritePcm16Mono(pieces[k], clip.SampleRate), ct).ConfigureAwait(false);
                     }
@@ -309,8 +335,6 @@ public sealed class DubService
 
             // 3) Mix with the original audio, ducked under the voice.
             Stage("миксиране със звука на филма");
-            var extractor = new AudioExtractor(_mediaEncoder.EncoderPath, _mediaEncoder.ProbePath);
-            int audioIndex = await extractor.GetDefaultAudioIndexAsync(video.Path, CancellationToken.None).ConfigureAwait(false);
             string output = OutputPath(video, language);
             string part = Path.Combine(Path.GetDirectoryName(output)!, "." + Path.GetFileName(output) + ".part");
             var r = await AudioExtractor.RunAsync(_mediaEncoder.EncoderPath, MixArguments(video.Path, audioIndex, narration, rate, language, part), CancellationToken.None).ConfigureAwait(false);
@@ -341,7 +365,34 @@ public sealed class DubService
             RefreshPriority.High);
     }
 
-    /// <summary>Groups consecutive missing lines into requests of at most N lines / 700 characters.</summary>
+    /// <summary>Speaker classes from the film's dialogue channel, then the line plan (male/female voices).</summary>
+    private async Task<List<DubSegment>> PlanByGenderAsync(Video video, IReadOnlyList<Cue> cues, int audioIndex, PluginConfiguration config, Action<string> stage)
+    {
+        stage("анализ на гласовете (мъжки/женски)");
+        var raw = Path.Combine(_appPaths.TempDirectory, "ai-translate", Guid.NewGuid().ToString("N") + ".raw");
+        Directory.CreateDirectory(Path.GetDirectoryName(raw)!);
+        try
+        {
+            await VoicePitch.ExtractDialogueAsync(_mediaEncoder.EncoderPath, _mediaEncoder.ProbePath, video.Path, audioIndex, raw, CancellationToken.None).ConfigureAwait(false);
+            await using var dialogue = File.OpenRead(raw);
+            var segments = DubPlanner.Plan(
+                cues,
+                config.DubSkipSongs,
+                (start, end) => VoicePitch.Classify(VoicePitch.MedianPitch(VoicePitch.Read(dialogue, start, end)), config.DubMaleBelowHz, config.DubFemaleAboveHz));
+            _logger.LogInformation(
+                "AI Translate: voice-over {Title}: {Male} male / {Female} female segments",
+                video.Name,
+                segments.Count(s => s.Kind != VoiceKind.Female),
+                segments.Count(s => s.Kind == VoiceKind.Female));
+            return segments;
+        }
+        finally
+        {
+            File.Delete(raw);
+        }
+    }
+
+    /// <summary>Groups consecutive missing lines with the same voice into requests of at most N lines / 700 characters.</summary>
     internal static List<List<int>> Batches(IReadOnlyList<int> missing, IReadOnlyList<DubSegment> segments, PluginConfiguration config)
     {
         int perRequest = Math.Clamp(config.DubLinesPerRequest, 1, 30);
@@ -349,7 +400,8 @@ public sealed class DubService
         foreach (int i in missing)
         {
             var last = batches.Count > 0 ? batches[^1] : null;
-            if (last is null || last.Count >= perRequest || last[^1] != i - 1 || last.Sum(j => segments[j].Text.Length) + segments[i].Text.Length > 700)
+            if (last is null || last.Count >= perRequest || last[^1] != i - 1 || segments[last[0]].Kind != segments[i].Kind
+                || last.Sum(j => segments[j].Text.Length) + segments[i].Text.Length > 700)
             {
                 batches.Add([i]);
             }

@@ -97,9 +97,17 @@
                             <select id="DubProvider" is="emby-select" class="emby-select-withcolor emby-select"></select>
                             <div class="fieldDescription" id="dubQuota"></div>
                         </div>
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label class="emby-checkbox-label"><input id="DubSplitByGender" type="checkbox" is="emby-checkbox" /><span>Различавай мъжки и женски глас</span></label>
+                            <div class="fieldDescription checkboxFieldDescription">По височината на гласа на говорещия в оригиналния звук (централния канал при 5.1). Приблизително — викове и шепот понякога грешат. Без допълнителни разходи.</div>
+                        </div>
                         <div class="inputContainer">
-                            <label class="inputLabel inputLabelUnfocused" for="DubVoice">Глас</label>
+                            <label class="inputLabel inputLabelUnfocused" for="DubVoice">Глас (мъжки / основен)</label>
                             <select id="DubVoice" is="emby-select" class="emby-select-withcolor emby-select"></select>
+                        </div>
+                        <div class="inputContainer" id="dubFemaleBox">
+                            <label class="inputLabel inputLabelUnfocused" for="DubVoiceFemale">Глас (женски)</label>
+                            <select id="DubVoiceFemale" is="emby-select" class="emby-select-withcolor emby-select"></select>
                         </div>
                         <div class="inputContainer">
                             <label class="inputLabel inputLabelUnfocused" for="DubStyle">Стил на говорене (на английски)</label>
@@ -120,6 +128,8 @@
                             <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="DubLinesPerRequest">Реплики в една заявка</label><input id="DubLinesPerRequest" type="number" step="any" min="1" max="30" is="emby-input" /><div class="fieldDescription">Разрязват се обратно по паузите и всяка отива на своето време.</div></div>
                             <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="DubMaxTempo">Максимално ускорение на реплика</label><input id="DubMaxTempo" type="number" step="any" min="1" max="1.5" is="emby-input" /></div>
                             <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="DubParallelism">Едновременни заявки</label><input id="DubParallelism" type="number" step="any" min="1" max="8" is="emby-input" /></div>
+                            <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="DubMaleBelowHz">Мъжки глас под (Hz)</label><input id="DubMaleBelowHz" type="number" step="any" is="emby-input" /></div>
+                            <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="DubFemaleAboveHz">Женски глас над (Hz)</label><input id="DubFemaleAboveHz" type="number" step="any" is="emby-input" /><div class="fieldDescription">Между двата прага гласът е „неясен“ и взима гласа на съседната реплика.</div></div>
                         </details>
                     </div>
 
@@ -207,10 +217,10 @@
         <script type="text/javascript">
             (function () {
                 var pluginId = '4cad7295-fa8b-46c9-a2e0-b6e5abe8a234';
-                var checks = ['CompareProviders', 'OnlyWhenNoOtherSubtitles', 'PreferExistingSubtitles', 'UseOtherProvidersAsSource', 'StripHearingImpaired', 'DubSkipSongs'];
-                var texts = ['OpenAiApiKey', 'GeminiApiKey', 'TargetLanguages', 'SourceLanguages', 'TranslationInstructions', 'GeminiThinkingLevel', 'OpenAiReasoningEffort', 'DubProvider', 'DubVoice', 'DubStyle', 'ActiveTranslator', 'ActiveTranscriber'];
+                var checks = ['CompareProviders', 'DubSplitByGender', 'OnlyWhenNoOtherSubtitles', 'PreferExistingSubtitles', 'UseOtherProvidersAsSource', 'StripHearingImpaired', 'DubSkipSongs'];
+                var texts = ['OpenAiApiKey', 'GeminiApiKey', 'TargetLanguages', 'SourceLanguages', 'TranslationInstructions', 'GeminiThinkingLevel', 'OpenAiReasoningEffort', 'DubProvider', 'DubVoice', 'DubVoiceFemale', 'DubStyle', 'ActiveTranslator', 'ActiveTranscriber'];
                 var models = ['GeminiTextModel', 'GeminiTranscribeModel', 'GeminiTtsModel', 'OpenAiTextModel', 'OpenAiTranscribeModel', 'OpenAiTtsModel'];
-                var numbers = ['MonthlyBudgetUsd', 'GeminiTtsRequestsPerMinute', 'GeminiTtsRequestsPerDay', 'GeminiAudioTokensPerMinute', 'OpenAiTtsRequestsPerMinute', 'DubLinesPerRequest', 'DubMaxTempo', 'DubParallelism', 'PriceGeminiTranscribePerMinute', 'PriceGeminiTextInputPerMTok', 'PriceGeminiTextOutputPerMTok', 'PriceGeminiTtsInputPerMTok', 'PriceGeminiTtsAudioPerMTok', 'PriceOpenAiTranscribePerMinute', 'PriceOpenAiTextInputPerMTok', 'PriceOpenAiTextOutputPerMTok', 'PriceOpenAiTtsPerMinute'];
+                var numbers = ['MonthlyBudgetUsd', 'GeminiTtsRequestsPerMinute', 'GeminiTtsRequestsPerDay', 'GeminiAudioTokensPerMinute', 'OpenAiTtsRequestsPerMinute', 'DubLinesPerRequest', 'DubMaxTempo', 'DubParallelism', 'DubMaleBelowHz', 'DubFemaleAboveHz', 'PriceGeminiTranscribePerMinute', 'PriceGeminiTextInputPerMTok', 'PriceGeminiTextOutputPerMTok', 'PriceGeminiTtsInputPerMTok', 'PriceGeminiTtsAudioPerMTok', 'PriceOpenAiTranscribePerMinute', 'PriceOpenAiTextInputPerMTok', 'PriceOpenAiTextOutputPerMTok', 'PriceOpenAiTtsPerMinute'];
                 var integers = ['GeminiTtsRequestsPerMinute', 'GeminiTtsRequestsPerDay', 'GeminiAudioTokensPerMinute', 'OpenAiTtsRequestsPerMinute', 'DubLinesPerRequest', 'DubParallelism'];
                 var page = document.querySelector('#AiTranslateConfigPage');
                 var savedConfig = null, modelLists = null, keyInfo = [], voiceProviders = [];
@@ -290,16 +300,27 @@
                 }
 
                 // --- voice-over ---
-                function fillVoices() {
-                    var p = voiceProviders.filter(function (x) { return x.Id === $('DubProvider').value; })[0];
-                    var sel = $('DubVoice');
-                    var current = sel.value || (savedConfig && savedConfig.DubVoice) || '';
+                function fillVoiceSelect(sel, p, wanted) {
+                    var current = sel.value || wanted || '';
                     sel.innerHTML = p ? p.Voices.map(function (v) { return '<option value="' + esc(v.Id) + '">' + esc(v.Id) + ' — ' + esc(v.Description) + '</option>'; }).join('') : '';
                     var match = p ? p.Voices.filter(function (v) { return v.Id.toLowerCase() === String(current).toLowerCase(); })[0] : null;
                     if (match) { sel.value = match.Id; }
+                    else if (p && sel.id === 'DubVoiceFemale') {
+                        // Default to the first female voice of this provider.
+                        var f = p.Voices.filter(function (v) { return /жен/.test(v.Description); })[0];
+                        if (f) { sel.value = f.Id; }
+                    }
+                }
+
+                function fillVoices() {
+                    var p = voiceProviders.filter(function (x) { return x.Id === $('DubProvider').value; })[0];
+                    fillVoiceSelect($('DubVoice'), p, savedConfig && savedConfig.DubVoice);
+                    fillVoiceSelect($('DubVoiceFemale'), p, savedConfig && savedConfig.DubVoiceFemale);
+                    $('dubFemaleBox').style.display = $('DubSplitByGender').checked ? '' : 'none';
                     $('dubQuota').innerHTML = !p ? 'Въведи работещ API ключ в таб „Доставчици“.' :
                         p.RequestsPerDay ? ('Днес: <b>' + p.UsedToday + ' / ' + p.RequestsPerDay + '</b> заявки (нулира се в 03:00). ~10 реплики на заявка → ~1 филм на ден.') : 'Без дневен лимит.';
                 }
+
                 function loadVoiceProviders() {
                     return api('GET', 'AiTranslate/Dub/Providers').then(function (list) {
                         voiceProviders = list || [];
@@ -349,6 +370,7 @@
                 }
 
                 $('DubProvider').addEventListener('change', fillVoices);
+                $('DubSplitByGender').addEventListener('change', fillVoices);
                 $('dubSearchBtn').addEventListener('click', dubSearch);
                 $('dubSearch').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); dubSearch(); } });
 
@@ -387,7 +409,7 @@
                         texts.forEach(function (k) {
                             var v = ($(k).value || '').trim();
                             // An empty provider select (no working key) keeps the stored choice.
-                            if (v || ['ActiveTranslator', 'ActiveTranscriber', 'DubProvider', 'DubVoice'].indexOf(k) < 0) { config[k] = v; }
+                            if (v || ['ActiveTranslator', 'ActiveTranscriber', 'DubProvider', 'DubVoice', 'DubVoiceFemale'].indexOf(k) < 0) { config[k] = v; }
                         });
                         models.forEach(function (k) { if ($(k).value) { config[k] = $(k).value; } });
                         numbers.forEach(function (k) { var v = parseFloat(String($(k).value).replace(',', '.')); if (!isNaN(v)) { config[k] = v; } });

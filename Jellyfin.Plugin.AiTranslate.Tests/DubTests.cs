@@ -31,6 +31,60 @@ public class DubTests
     }
 
     [Fact]
+    public void GenderPlanSplitsSpeakersAndOnlyMergesSameVoice()
+    {
+        var cues = new[]
+        {
+            C(10, 12, "- Кой е там?\n- Аз."),     // two speakers in one cue
+            C(12.2, 13, "Влизай."),
+            C(13.1, 14, "Благодаря."),
+        };
+
+        // Fake analysis: the woman asks (10.0–11.6 s), a man answers and keeps talking; 13.1 s is unclear.
+        VoiceKind Classify(TimeSpan s, TimeSpan e) => s.TotalSeconds < 11 ? VoiceKind.Female : s.TotalSeconds < 13 ? VoiceKind.Male : VoiceKind.Unknown;
+
+        var plan = DubPlanner.Plan(cues, skipSongs: true, Classify);
+
+        // The cue is split per speaker; the man's lines (and the unclear one after them) are joined.
+        Assert.Equal(["Кой е там?", "Аз. Влизай. Благодаря."], plan.Select(p => p.Text));
+        Assert.Equal([VoiceKind.Female, VoiceKind.Male], plan.Select(p => p.Kind));
+        Assert.Equal(TimeSpan.FromSeconds(10), plan[0].Start);
+        Assert.True(plan[0].End > TimeSpan.FromSeconds(11) && plan[0].End < TimeSpan.FromSeconds(12));
+        Assert.Equal(plan[0].End, plan[1].Start);
+        Assert.Equal(TimeSpan.FromSeconds(14), plan[1].End);
+
+        // Same speaker class on both sides of a two-speaker cue: one request is enough.
+        var allFemale = DubPlanner.Plan(cues.Take(1).ToList(), skipSongs: true, (_, _) => VoiceKind.Female);
+        Assert.Equal(["Кой е там? Аз."], allFemale.Select(p => p.Text));
+    }
+
+    [Theory]
+    [InlineData(81.0, VoiceKind.Male)]
+    [InlineData(150.0, VoiceKind.Male)]
+    [InlineData(175.0, VoiceKind.Unknown)]
+    [InlineData(211.0, VoiceKind.Female)]
+    [InlineData(381.0, VoiceKind.Unknown)]   // scream
+    [InlineData(null, VoiceKind.Unknown)]
+    public void PitchClasses(double? hz, VoiceKind expected) => Assert.Equal(expected, VoicePitch.Classify(hz, 165, 185));
+
+    [Fact]
+    public void PitchOfSyntheticVoices()
+    {
+        short[] Voice(double hz) => Enumerable.Range(0, 8000).Select(i =>
+            (short)((6000 * Math.Sin(2 * Math.PI * hz * i / 8000)) + (2500 * Math.Sin(2 * Math.PI * 2 * hz * i / 8000)))).ToArray();
+        Assert.InRange(VoicePitch.MedianPitch(Voice(110))!.Value, 105, 115);
+        Assert.InRange(VoicePitch.MedianPitch(Voice(220))!.Value, 210, 230);
+        Assert.Null(VoicePitch.MedianPitch(new short[8000]));
+    }
+
+    [Fact]
+    public void UnknownTakesNearestKnownNeighbour()
+    {
+        var filled = VoicePitch.FillUnknown([VoiceKind.Unknown, VoiceKind.Female, VoiceKind.Unknown, VoiceKind.Male, VoiceKind.Unknown]);
+        Assert.Equal([VoiceKind.Female, VoiceKind.Female, VoiceKind.Female, VoiceKind.Male, VoiceKind.Male], filled);
+    }
+
+    [Fact]
     public void PlaceSpeedsUpToFitThenShiftsWhenStillTooLong()
     {
         var segments = new[]
@@ -131,6 +185,8 @@ public class DubTests
         Assert.Equal("onyx", DubService.GetVoice(openAi, "Charon"));   // Gemini voice name → OpenAI default
         Assert.Equal("marin", DubService.GetVoice(openAi, "Marin"));
         Assert.Equal("Kore", DubService.GetVoice(new GeminiTts(null!), "kore"));
+        Assert.Equal("marin", DubService.GetFemaleVoice(openAi, "Kore"));       // Gemini female name → OpenAI first female
+        Assert.Equal("Aoede", DubService.GetFemaleVoice(new GeminiTts(null!), "aoede"));
     }
 
     private static short[] Tone(double seconds, int rate = 24000) =>
