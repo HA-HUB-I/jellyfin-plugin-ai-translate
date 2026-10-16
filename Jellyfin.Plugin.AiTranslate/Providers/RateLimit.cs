@@ -7,6 +7,33 @@ using System.Threading.Tasks;
 
 namespace Jellyfin.Plugin.AiTranslate.Providers;
 
+/// <summary>Spaces requests evenly to stay under a requests-per-minute limit, shared by all callers.</summary>
+public sealed class Pacer
+{
+    private readonly object _lock = new();
+    private DateTime _next = DateTime.MinValue;
+
+    public Task WaitAsync(int requestsPerMinute, CancellationToken cancellationToken)
+    {
+        if (requestsPerMinute <= 0)
+        {
+            return Task.CompletedTask;
+        }
+
+        var interval = TimeSpan.FromMinutes(1.0 / requestsPerMinute);
+        TimeSpan wait;
+        lock (_lock)
+        {
+            var now = DateTime.UtcNow;
+            var slot = _next > now ? _next : now;
+            _next = slot + interval;
+            wait = slot - now;
+        }
+
+        return wait > TimeSpan.Zero ? Task.Delay(wait, cancellationToken) : Task.CompletedTask;
+    }
+}
+
 /// <summary>Retries HTTP 429/503 answers, honouring "retry in Ns" / "Please try again in 1.5s" hints.</summary>
 public static partial class RateLimit
 {

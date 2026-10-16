@@ -5,7 +5,7 @@
     <title>AI Translate</title>
 </head>
 <body>
-    <div id="AiTranslateConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-checkbox,emby-textarea">
+    <div id="AiTranslateConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-checkbox,emby-textarea,emby-select">
         <div data-role="content">
             <div class="content-primary">
                 <form id="AiTranslateConfigForm">
@@ -71,8 +71,32 @@
                         <textarea id="TranslationInstructions" is="emby-textarea" rows="2" placeholder="e.g. Use informal address between friends. Keep 'Captain' as 'капитане'."></textarea>
                     </div>
 
+                    <h3>Дублаж (AI войсоувър)</h3>
+                    <div class="fieldDescription">Озвучава филм от българските му субтитри: оригиналният звук остава отдолу (по-тих, докато говори дикторът). Резултатът е отделна аудиопътечка „<b>Български (AI войсоувър)</b>“ до филма — видеото не се пипа. Пуска се само ръчно.</div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="DubVoice">Глас</label>
+                        <select id="DubVoice" is="emby-select" class="emby-select-withcolor emby-select"></select>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="DubStyle">Стил на говорене (на английски)</label>
+                        <input id="DubStyle" type="text" is="emby-input" />
+                    </div>
+                    <div class="checkboxContainer"><label class="emby-checkbox-label"><input id="DubSkipSongs" type="checkbox" is="emby-checkbox" /><span>Не озвучавай песните (♪ …), остави оригинала</span></label></div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="dubSearch">Търси филм с български субтитри</label>
+                        <input id="dubSearch" type="text" is="emby-input" placeholder="напр. Мангуста" />
+                    </div>
+                    <button is="emby-button" type="button" id="dubSearchBtn" class="raised emby-button"><span>Търси</span></button>
+                    <div id="dubResults" style="margin:1em 0"></div>
+
                     <details>
                         <summary>Models and prices</summary>
+                        <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="GeminiTtsModel">Gemini voice model</label><input id="GeminiTtsModel" type="text" is="emby-input" /></div>
+                        <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="DubMaxTempo">Max speed-up to fit a line (1.0–1.5)</label><input id="DubMaxTempo" type="number" step="0.05" min="1" max="1.5" is="emby-input" /></div>
+                        <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="DubParallelism">Lines synthesized in parallel</label><input id="DubParallelism" type="number" step="1" min="1" max="8" is="emby-input" /></div>
+                        <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="GeminiTtsRequestsPerMinute">Gemini voice requests per minute (your tier's limit)</label><input id="GeminiTtsRequestsPerMinute" type="number" step="1" min="1" is="emby-input" /><div class="fieldDescription">Tier 1: 10 — a 100-minute film (~650 lines) takes about an hour. Raise it when Google raises your tier.</div></div>
+                        <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="PriceGeminiTtsInputPerMTok">Gemini voice text input, USD / 1M tokens</label><input id="PriceGeminiTtsInputPerMTok" type="number" step="0.01" is="emby-input" /></div>
+                        <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="PriceGeminiTtsAudioPerMTok">Gemini voice audio output, USD / 1M tokens (25 tokens/s; doubles from 2027-01-01)</label><input id="PriceGeminiTtsAudioPerMTok" type="number" step="0.01" is="emby-input" /></div>
                         <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="OpenAiTranscribeModel">OpenAI speech model (must return timestamps)</label><input id="OpenAiTranscribeModel" type="text" is="emby-input" /></div>
                         <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="OpenAiTextModel">OpenAI translation model</label><input id="OpenAiTextModel" type="text" is="emby-input" /></div>
                         <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="GeminiTranscribeModel">Gemini speech model</label><input id="GeminiTranscribeModel" type="text" is="emby-input" /></div>
@@ -102,9 +126,9 @@
         <script type="text/javascript">
             (function () {
                 var pluginId = '4cad7295-fa8b-46c9-a2e0-b6e5abe8a234';
-                var checks = ['EnableOpenAiTranscription', 'EnableGeminiTranscription', 'EnableOpenAiTranslation', 'EnableGeminiTranslation', 'OnlyWhenNoOtherSubtitles', 'PreferExistingSubtitles', 'UseOtherProvidersAsSource', 'StripHearingImpaired'];
-                var texts = ['OpenAiApiKey', 'GeminiApiKey', 'TargetLanguages', 'SourceLanguages','TranslationInstructions', 'OpenAiTranscribeModel', 'OpenAiTextModel', 'GeminiTranscribeModel', 'GeminiTextModel', 'GeminiThinkingLevel', 'OpenAiReasoningEffort'];
-                var numbers = ['MonthlyBudgetUsd', 'GeminiAudioTokensPerMinute','PriceOpenAiTranscribePerMinute', 'PriceGeminiTranscribePerMinute', 'PriceOpenAiTextInputPerMTok', 'PriceOpenAiTextOutputPerMTok', 'PriceGeminiTextInputPerMTok', 'PriceGeminiTextOutputPerMTok'];
+                var checks = ['EnableOpenAiTranscription', 'EnableGeminiTranscription', 'EnableOpenAiTranslation', 'EnableGeminiTranslation', 'OnlyWhenNoOtherSubtitles', 'PreferExistingSubtitles', 'UseOtherProvidersAsSource', 'StripHearingImpaired', 'DubSkipSongs'];
+                var texts = ['OpenAiApiKey', 'GeminiApiKey', 'TargetLanguages', 'SourceLanguages','TranslationInstructions', 'OpenAiTranscribeModel', 'OpenAiTextModel', 'GeminiTranscribeModel', 'GeminiTextModel', 'GeminiThinkingLevel', 'OpenAiReasoningEffort', 'GeminiTtsModel', 'DubVoice', 'DubStyle'];
+                var numbers = ['MonthlyBudgetUsd', 'GeminiAudioTokensPerMinute', 'DubMaxTempo', 'DubParallelism', 'GeminiTtsRequestsPerMinute', 'PriceGeminiTtsInputPerMTok', 'PriceGeminiTtsAudioPerMTok', 'PriceOpenAiTranscribePerMinute', 'PriceGeminiTranscribePerMinute', 'PriceOpenAiTextInputPerMTok', 'PriceOpenAiTextOutputPerMTok', 'PriceGeminiTextInputPerMTok', 'PriceGeminiTextOutputPerMTok'];
                 var page = document.querySelector('#AiTranslateConfigPage');
 
                 function esc(s) { var d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
@@ -122,15 +146,61 @@
                     });
                 }
 
+                function api(method, path) {
+                    return ApiClient.ajax({ type: method, url: ApiClient.getUrl(path), dataType: method === 'GET' ? 'json' : undefined });
+                }
+
+                function dubSearch() {
+                    var q = page.querySelector('#dubSearch').value.trim();
+                    var box = page.querySelector('#dubResults');
+                    box.innerHTML = '…';
+                    api('GET', 'AiTranslate/Dub/Candidates?language=bg&search=' + encodeURIComponent(q)).then(function (items) {
+                        if (!items.length) { box.innerHTML = 'Няма филми с български текстови субтитри за „' + esc(q) + '“.'; return; }
+                        box.innerHTML = items.map(function (it) {
+                            return '<div style="margin:.5em 0"><b>' + esc(it.Name) + '</b> ' + (it.ProductionYear || '') + (it.Exists ? ' · <i>вече има дублаж</i>' : '') +
+                                ' <button is="emby-button" type="button" class="emby-button dubEst" data-id="' + it.Id + '">Цена</button>' +
+                                ' <span class="dubInfo" data-id="' + it.Id + '"></span></div>';
+                        }).join('');
+                        box.querySelectorAll('.dubEst').forEach(function (b) { b.addEventListener('click', function () { dubEstimate(b.getAttribute('data-id')); }); });
+                    });
+                }
+
+                function dubEstimate(id) {
+                    var info = page.querySelector('.dubInfo[data-id="' + id + '"]');
+                    info.textContent = 'изчисляване…';
+                    api('GET', 'AiTranslate/Dub/Estimate?language=bg&itemId=' + id).then(function (e) {
+                        info.innerHTML = e.Segments + ' реплики, ~' + e.SpeechMinutes.toFixed(0) + ' мин говор · <b>≈ $' + e.CostUsd.toFixed(2) + '</b> · ~' + Math.ceil(e.Minutes) + ' мин' +
+                            (e.Exists ? ' (ще замени съществуващия)' : '') +
+                            ' <button is="emby-button" type="button" class="raised button-submit emby-button dubGo"><span>Озвучи с ' + esc(page.querySelector('#DubVoice').value) + '</span></button>';
+                        info.querySelector('.dubGo').addEventListener('click', function () {
+                            var voice = page.querySelector('#DubVoice').value;
+                            api('POST', 'AiTranslate/Dub/Start?language=bg&itemId=' + id + '&voice=' + encodeURIComponent(voice)).then(function () {
+                                info.innerHTML = '⏳ стартирано — виж „This month“ горе';
+                                loadStatus();
+                            }, function () { info.textContent = 'вече тече'; });
+                        });
+                    }, function () { info.textContent = 'грешка при изчисляването'; });
+                }
+
+                page.querySelector('#dubSearchBtn').addEventListener('click', dubSearch);
+                page.querySelector('#dubSearch').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); dubSearch(); } });
+
+                var timer = null;
                 page.addEventListener('pageshow', function () {
                     Dashboard.showLoadingMsg();
-                    ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+                    api('GET', 'AiTranslate/Dub/Voices').then(function (voices) {
+                        var sel = page.querySelector('#DubVoice');
+                        sel.innerHTML = voices.map(function (v) { return '<option value="' + esc(v.Id) + '">' + esc(v.Id) + ' — ' + esc(v.Description) + '</option>'; }).join('');
+                        return ApiClient.getPluginConfiguration(pluginId);
+                    }).then(function (config) {
                         checks.forEach(function (k) { page.querySelector('#' + k).checked = config[k]; });
                         texts.concat(numbers).forEach(function (k) { page.querySelector('#' + k).value = config[k] == null ? '' : config[k]; });
                         Dashboard.hideLoadingMsg();
                     });
                     loadStatus();
+                    timer = setInterval(loadStatus, 10000);
                 });
+                page.addEventListener('pagehide', function () { if (timer) { clearInterval(timer); timer = null; } });
 
                 page.querySelector('#AiTranslateConfigForm').addEventListener('submit', function (e) {
                     e.preventDefault();

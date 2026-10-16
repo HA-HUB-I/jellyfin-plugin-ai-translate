@@ -91,4 +91,32 @@ public class PluginConfiguration : BasePluginConfiguration
     public double PriceGeminiTextInputPerMTok { get; set; } = 0.75;
 
     public double PriceGeminiTextOutputPerMTok { get; set; } = 3.75;
+
+    // --- Voice-over (dubbing) ---
+
+    public string GeminiTtsModel { get; set; } = "gemini-3.8-flash-tts";
+
+    /// <summary>Gets or sets the prebuilt voice (Charon, Kore, Puck, Zephyr, …).</summary>
+    public string DubVoice { get; set; } = "Charon";
+
+    /// <summary>Gets or sets the delivery style sent with every line.</summary>
+    public string DubStyle { get; set; } = "calm Bulgarian TV voice-over narrator, neutral and clear, slightly fast";
+
+    /// <summary>Gets or sets a value indicating whether lines that are only song lyrics (♪ … ♪) are left to the original audio.</summary>
+    public bool DubSkipSongs { get; set; } = true;
+
+    /// <summary>Gets or sets how much a line may be sped up to fit its time slot.</summary>
+    public double DubMaxTempo { get; set; } = 1.3;
+
+    /// <summary>Gets or sets how many lines are synthesized at the same time.</summary>
+    public int DubParallelism { get; set; } = 3;
+
+    /// <summary>Gets or sets the TTS requests-per-minute limit of the account's tier (Gemini Tier 1: 10). Requests are paced to it.</summary>
+    public int GeminiTtsRequestsPerMinute { get; set; } = 10;
+
+    /// <summary>Gets or sets the TTS text input price (USD per 1M tokens).</summary>
+    public double PriceGeminiTtsInputPerMTok { get; set; } = 0.5;
+
+    /// <summary>Gets or sets the TTS audio output price (USD per 1M tokens; 25 tokens per second). Google doubles it from 2027-01-01.</summary>
+    public double PriceGeminiTtsAudioPerMTok { get; set; } = 9.0;
 }

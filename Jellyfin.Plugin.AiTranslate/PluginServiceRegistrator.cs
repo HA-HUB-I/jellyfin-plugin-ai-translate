@@ -18,6 +18,8 @@ public sealed class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<OpenAiProvider>();
         serviceCollection.AddSingleton<GeminiProvider>();
         serviceCollection.AddSingleton<SubtitleJobService>();
+        serviceCollection.AddSingleton<GeminiTts>();
+        serviceCollection.AddSingleton<Dubbing.DubService>();
         serviceCollection.AddSingleton<ISubtitleProvider, AiSubtitleProvider>();
     }
 }
