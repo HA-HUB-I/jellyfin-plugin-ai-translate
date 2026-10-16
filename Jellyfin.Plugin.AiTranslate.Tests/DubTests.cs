@@ -179,6 +179,9 @@ public class DubTests
     {
         Assert.False(RateLimit.IsRetryable("Gemini TTS 429: limit: 100 requests per day on Tier 1. Please retry in 14h22m27s"));
         Assert.True(RateLimit.IsRetryable("Gemini TTS 429: limit: 10 requests per minute on Tier 1. Please retry in 41s"));
+
+        // Measured answer for an OpenAI key without prepaid credits.
+        Assert.False(RateLimit.IsRetryable("OpenAI TTS 429: {\"error\":{\"message\":\"You have no credits remaining.\",\"type\":\"insufficient_quota\",\"code\":\"credit_balance_exhausted\"}}"));
     }
 
     [Fact]

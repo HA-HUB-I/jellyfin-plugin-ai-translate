@@ -34,6 +34,7 @@ public class ModelCatalogTests
         var lists = ModelCatalog.ClassifyOpenAi(
         [
             "gpt-6.1-sol", "gpt-6-luna", "o5-mini", "gpt-4o-mini-tts", "tts-1-hd", "whisper-1", "gpt-transcribe",
+            "gpt-realtime-whisper", "gpt-live-transcribe",
             "gpt-4o-realtime-preview", "gpt-image-2", "text-embedding-3-large", "gpt-4o-audio-preview", "dall-e-3",
         ]);
 

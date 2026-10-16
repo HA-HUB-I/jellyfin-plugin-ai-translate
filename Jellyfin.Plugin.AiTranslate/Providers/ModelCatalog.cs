@@ -82,7 +82,7 @@ public sealed class ModelCatalog
         var all = ids.ToList();
         static bool Has(string id, params string[] parts) => parts.Any(p => id.Contains(p, StringComparison.OrdinalIgnoreCase));
         var tts = all.Where(id => Has(id, "tts"));
-        var transcribe = all.Where(id => Has(id, "transcribe", "whisper"));
+        var transcribe = all.Where(id => Has(id, "transcribe", "whisper") && !Has(id, "realtime", "live"));
         var text = all.Where(id => (id.StartsWith("gpt-", StringComparison.Ordinal) || (id.Length > 1 && id[0] == 'o' && char.IsDigit(id[1])))
             && !Has(id, "tts", "transcribe", "audio", "realtime", "image", "search", "instruct", "embedding", "codex", "computer"));
         return new ModelLists(Sort(transcribe), Sort(text), Sort(tts), null);

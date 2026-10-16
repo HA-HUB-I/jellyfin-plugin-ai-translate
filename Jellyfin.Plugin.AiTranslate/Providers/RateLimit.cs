@@ -54,10 +54,13 @@ public static partial class RateLimit
         }
     }
 
-    // A daily quota ("100 requests per day … retry in 14h") is not worth waiting for inside a job.
+    // A daily quota ("100 requests per day … retry in 14h") or an empty prepaid balance (OpenAI answers 429
+    // "insufficient_quota") is not worth waiting for inside a job.
     internal static bool IsRetryable(string message) =>
         (message.Contains(" 429:", StringComparison.Ordinal) || message.Contains(" 503:", StringComparison.Ordinal))
-        && !message.Contains("per day", StringComparison.OrdinalIgnoreCase);
+        && !message.Contains("per day", StringComparison.OrdinalIgnoreCase)
+        && !message.Contains("insufficient_quota", StringComparison.Ordinal)
+        && !message.Contains("credit_balance", StringComparison.Ordinal);
 
     internal static TimeSpan RetryDelay(string message, int attempt)
     {
