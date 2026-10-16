@@ -155,6 +155,8 @@ public class DubTests
         var args = DubService.MixArguments("/m/film.mp4", 0, "/t/n.raw", 24000, "bg", "/m/.film.bg.mka.part");
         var line = string.Join(' ', args);
         Assert.Contains("sidechaincompress", line, StringComparison.Ordinal);
+        Assert.Contains("apad,asplit", line, StringComparison.Ordinal);       // track lasts as long as the film
+        Assert.Contains("duration=first", line, StringComparison.Ordinal);
         Assert.Contains("[0:a:0]", line, StringComparison.Ordinal);
         Assert.Contains("language=bul", line, StringComparison.Ordinal);
         Assert.Contains("title=" + DubService.TrackTitle, line, StringComparison.Ordinal);

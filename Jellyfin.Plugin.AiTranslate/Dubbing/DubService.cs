@@ -285,9 +285,10 @@ public sealed class DubService
     internal static List<string> MixArguments(string mediaPath, int audioIndex, string narrationRaw, int narrationRate, string language, string output)
     {
         // Voice → stereo, louder; it also drives the compressor that lowers the film's audio while someone narrates.
+        // apad: the narration ends with the last line, but the track must last as long as the film (credits).
         string graph = string.Create(
             CultureInfo.InvariantCulture,
-            $"[1:a]aresample={OutputRate},pan=stereo|c0=c0|c1=c0,volume=1.3,asplit=2[voice][sc];[0:a:{audioIndex}]aresample={OutputRate},aformat=channel_layouts=stereo[orig];[orig][sc]sidechaincompress=threshold=0.012:ratio=12:attack=20:release=450[duck];[duck][voice]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.95[out]");
+            $"[1:a]aresample={OutputRate},pan=stereo|c0=c0|c1=c0,volume=1.3,apad,asplit=2[voice][sc];[0:a:{audioIndex}]aresample={OutputRate},aformat=channel_layouts=stereo[orig];[orig][sc]sidechaincompress=threshold=0.012:ratio=12:attack=20:release=450[duck];[duck][voice]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.95[out]");
         return
         [
             "-hide_banner", "-nostdin", "-nostats", "-v", "error", "-y",

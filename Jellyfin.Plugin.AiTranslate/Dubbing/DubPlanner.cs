@@ -15,8 +15,11 @@ public sealed record PlacedClip(TimeSpan Start, TimeSpan Duration, double Tempo)
 /// <summary>Turns subtitle cues into narration segments and places synthesized clips on the timeline.</summary>
 public static partial class DubPlanner
 {
-    /// <summary>Measured Gemini TTS speaking rate for Bulgarian (95 characters in 5.7 s).</summary>
-    public const double CharactersPerSecond = 16.5;
+    /// <summary>
+    /// Billed speech per character for Bulgarian, measured on a whole film (25 311 characters → 34.9 min of audio,
+    /// pauses between batched lines included).
+    /// </summary>
+    public const double CharactersPerSecond = 12;
 
     private static readonly TimeSpan MergeGap = TimeSpan.FromMilliseconds(350);
     private static readonly TimeSpan MaxSegment = TimeSpan.FromSeconds(9);
