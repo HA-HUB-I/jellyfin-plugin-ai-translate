@@ -29,6 +29,10 @@ namespace Jellyfin.Plugin.AiTranslate;
 /// </summary>
 public sealed class AiSubtitleProvider : ISubtitleProvider
 {
+    /// <summary>Marks the temporary "being generated" subtitle so it can be found and replaced.</summary>
+    public const string PendingMarker = "⏳ AI Translate:";
+
+    private static readonly TimeSpan QuickWait = TimeSpan.FromSeconds(20);
     private static readonly TimeSpan OtherProvidersTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan OtherProvidersCacheTime = TimeSpan.FromMinutes(10);
 
@@ -39,13 +43,15 @@ public sealed class AiSubtitleProvider : ISubtitleProvider
     private readonly ILibraryManager _libraryManager;
     private readonly IServiceProvider _services;
     private readonly ILogger<AiSubtitleProvider> _logger;
+    private readonly Notifier _notifier;
     private readonly ConcurrentDictionary<string, (RemoteSubtitleInfo[] Results, DateTime Utc)> _othersCache = new(StringComparer.Ordinal);
 
-    public AiSubtitleProvider(SubtitleJobService jobs, ILibraryManager libraryManager, IServiceProvider services, ILogger<AiSubtitleProvider> logger)
+    public AiSubtitleProvider(SubtitleJobService jobs, ILibraryManager libraryManager, IServiceProvider services, Notifier notifier, ILogger<AiSubtitleProvider> logger)
     {
         _jobs = jobs;
         _libraryManager = libraryManager;
         _services = services;
+        _notifier = notifier;
         _logger = logger;
     }
 
@@ -155,18 +161,110 @@ public sealed class AiSubtitleProvider : ISubtitleProvider
         var job = Decode(id);
         _logger.LogInformation("AI Translate: {Title} → {Lang} from {Source} with {Translator}", job.Title, job.TargetLanguage, job.SourceKey, job.TranslatorId);
 
-        // A finished file is served directly; otherwise the job runs detached from this request (it still completes,
-        // and Jellyfin saves the subtitle, if the client stops waiting).
-        string path = _jobs.CachedPath(job) ?? await _jobs.RunAsync(job).WaitAsync(cancellationToken).ConfigureAwait(false);
-        var bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
-        return new SubtitleResponse
+        string? cached = _jobs.CachedPath(job);
+        if (cached is not null)
         {
-            Format = "srt",
-            Language = job.TargetLanguage,
-            IsForced = false,
-            Stream = new MemoryStream(bytes),
-        };
+            return Response(job, await File.ReadAllBytesAsync(cached, cancellationToken).ConfigureAwait(false));
+        }
+
+        // Quick jobs (e.g. translating a cached transcript) are returned directly. Longer ones run detached: Jellyfin gets
+        // a one-line "being generated" subtitle right away (so the user sees that it started), and the file is replaced
+        // with the real subtitles when the job finishes.
+        bool alreadyRunning = _jobs.IsRunning(job);
+        var task = _jobs.RunAsync(job);
+        if (await Task.WhenAny(task, Task.Delay(QuickWait, cancellationToken)).ConfigureAwait(false) == task)
+        {
+            return Response(job, await File.ReadAllBytesAsync(await task.ConfigureAwait(false), cancellationToken).ConfigureAwait(false));
+        }
+
+        string eta = job.SourceKind == SourceKind.Audio ? "15–25 мин" : "1–5 мин";
+        if (!alreadyRunning)
+        {
+            await _notifier.SendAsync($"Генерирането на субтитри ({job.TargetLanguage}) за „{job.Title}“ започна — около {eta}. Субтитрите ще се появят сами.").ConfigureAwait(false);
+            _ = task.ContinueWith(t => OnJobFinishedAsync(job, t), CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default).Unwrap();
+        }
+
+        return Response(job, System.Text.Encoding.UTF8.GetBytes(Placeholder(eta)));
     }
+
+    /// <summary>Text of the temporary subtitle; also the marker used to find and replace it later.</summary>
+    internal static string Placeholder(string eta) =>
+        $"1\n00:00:00,000 --> 09:59:59,000\n{PendingMarker} субтитрите се генерират (~{eta}).\nЩе се сменят с истинските автоматично.\n";
+
+    /// <summary>Writes the finished subtitles (or the error) over every placeholder Jellyfin saved for this film.</summary>
+    internal static int ReplacePlaceholders(IEnumerable<string> candidateFiles, string content)
+    {
+        int replaced = 0;
+        foreach (var file in candidateFiles.Distinct(StringComparer.Ordinal))
+        {
+            try
+            {
+                if (File.Exists(file) && new FileInfo(file).Length < 4096 && File.ReadAllText(file).Contains(PendingMarker, StringComparison.Ordinal))
+                {
+                    File.WriteAllText(file, content, new UTF8Encoding(false));
+                    replaced++;
+                }
+            }
+            catch (IOException)
+            {
+            }
+        }
+
+        return replaced;
+    }
+
+    private async Task OnJobFinishedAsync(SubtitleJob job, Task<string> finished)
+    {
+        string content;
+        string message;
+        if (finished.IsCompletedSuccessfully)
+        {
+            content = await File.ReadAllTextAsync(await finished.ConfigureAwait(false)).ConfigureAwait(false);
+            message = $"Субтитрите ({job.TargetLanguage}) за „{job.Title}“ са готови.";
+        }
+        else
+        {
+            string reason = finished.Exception?.GetBaseException().Message ?? "прекъснато";
+            content = $"1\n00:00:00,000 --> 09:59:59,000\n⚠ AI Translate: субтитрите не успяха.\n{(reason.Length > 120 ? reason[..120] : reason)}\n";
+            message = $"Субтитрите за „{job.Title}“ не успяха: {reason}";
+        }
+
+        // Jellyfin saves the downloaded subtitle next to the film or in its metadata folder; look at both.
+        var video = _libraryManager.FindByPath(job.MediaPath, false) as Video;
+        var candidates = new List<string>();
+        if (video is not null)
+        {
+            candidates.AddRange(video.GetMediaStreams().Where(s => s.Type == MediaStreamType.Subtitle && s.IsExternal && !string.IsNullOrEmpty(s.Path)).Select(s => s.Path));
+        }
+
+        var folder = Path.GetDirectoryName(job.MediaPath);
+        if (folder is not null && Directory.Exists(folder))
+        {
+            candidates.AddRange(Directory.GetFiles(folder, "*.srt"));
+        }
+
+        int replaced = ReplacePlaceholders(candidates, content);
+        _logger.LogInformation("AI Translate: {Title}: replaced {Count} placeholder subtitle file(s)", job.Title, replaced);
+        if (video is not null && replaced > 0)
+        {
+            var providers = _services.GetService<IProviderManager>();
+            var fileSystem = _services.GetService<MediaBrowser.Model.IO.IFileSystem>();
+            if (providers is not null && fileSystem is not null)
+            {
+                providers.QueueRefresh(video.Id, new MetadataRefreshOptions(new DirectoryService(fileSystem)) { MetadataRefreshMode = MetadataRefreshMode.FullRefresh, ImageRefreshMode = MetadataRefreshMode.None }, RefreshPriority.High);
+            }
+        }
+
+        await _notifier.SendAsync(message, finished.IsCompletedSuccessfully ? 10000 : 30000).ConfigureAwait(false);
+    }
+
+    private static SubtitleResponse Response(SubtitleJob job, byte[] bytes) => new()
+    {
+        Format = "srt",
+        Language = job.TargetLanguage,
+        IsForced = false,
+        Stream = new MemoryStream(bytes),
+    };
 
     internal static string Encode(SubtitleJob job) =>
         Convert.ToBase64String(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(job))).TrimEnd('=').Replace('+', '-').Replace('/', '_');

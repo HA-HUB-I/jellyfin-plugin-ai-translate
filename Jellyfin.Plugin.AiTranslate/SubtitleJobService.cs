@@ -204,6 +204,8 @@ public sealed class SubtitleJobService
         }));
     }
 
+    public bool IsRunning(SubtitleJob job) => _running.ContainsKey($"{job.MediaPath}|{job.TargetLanguage}|{job.SourceKey}|{job.TranslatorId}");
+
     /// <summary>Returns the finished file for a cached job id, if any.</summary>
     public string? CachedPath(SubtitleJob job)
     {

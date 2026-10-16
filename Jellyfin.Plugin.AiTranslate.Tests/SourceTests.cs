@@ -158,6 +158,28 @@ public class SourceTests
     }
 
     [Fact]
+    public void PlaceholderIsReplacedOnlyWhereItWasSaved()
+    {
+        var dir = System.IO.Directory.CreateTempSubdirectory("ai-placeholder-").FullName;
+        try
+        {
+            string pending = System.IO.Path.Combine(dir, "Film.bg.srt");
+            string human = System.IO.Path.Combine(dir, "Film.en.srt");
+            System.IO.File.WriteAllText(pending, AiSubtitleProvider.Placeholder("15–25 мин"));
+            System.IO.File.WriteAllText(human, "1\n00:00:01,000 --> 00:00:02,000\nHello\n");
+
+            Assert.Equal(1, AiSubtitleProvider.ReplacePlaceholders([pending, human, pending, System.IO.Path.Combine(dir, "missing.srt")], "1\n00:00:01,000 --> 00:00:02,000\nЗдравей\n"));
+            Assert.Contains("Здравей", System.IO.File.ReadAllText(pending), StringComparison.Ordinal);
+            Assert.Contains("Hello", System.IO.File.ReadAllText(human), StringComparison.Ordinal);
+            Assert.Single(CueTools.ParseSrt(AiSubtitleProvider.Placeholder("1–5 мин")));
+        }
+        finally
+        {
+            System.IO.Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void JobSourceKeys()
     {
         Assert.Equal("gemini", new SubtitleJob("/m", "T", "bg", "gemini", "gemini").SourceKey);

@@ -18,6 +18,7 @@ public sealed class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<OpenAiProvider>();
         serviceCollection.AddSingleton<GeminiProvider>();
         serviceCollection.AddSingleton<SubtitleJobService>();
+        serviceCollection.AddSingleton<Notifier>();
         serviceCollection.AddSingleton<GeminiTts>();
         serviceCollection.AddSingleton<OpenAiTts>();
         serviceCollection.AddSingleton<ModelCatalog>();
