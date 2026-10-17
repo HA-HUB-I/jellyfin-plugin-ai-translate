@@ -595,3 +595,96 @@ public class RepairTests
         Assert.InRange(cues[^1].End.TotalSeconds, 12, 15);
     }
 }
+
+public class GeminiTranscribeTests
+{
+    private const string Completed = "{\"id\":\"interactions/2\",\"status\":\"completed\",\"steps\":[{\"content\":[{\"type\":\"text\",\"annotations\":[{\"type\":\"word_info\",\"text\":\"Hello.\",\"start_offset\":\"0.5s\",\"end_offset\":\"1.0s\"}]}]}]}";
+
+    [Fact]
+    public async Task AsksAgainWhenATranscriptionComesBackIncomplete()
+    {
+        // Measured on The Old Guard 2: chunk 8 of 18 came back "incomplete", the same audio was complete right after.
+        int interactions = 0;
+        var (http, result) = await Transcribe(() => ++interactions == 1 ? "{\"id\":\"interactions/1\",\"status\":\"incomplete\"}" : Completed);
+        Assert.Equal(2, interactions);
+        Assert.Equal("Hello.", Assert.Single(result.Cues).Text);
+        Assert.Equal(12, result.Usage.AudioMinutes, 6);                      // both requests sent the whole 6-minute chunk
+        Assert.Contains(http.Requests, r => r.StartsWith("DELETE", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task GivesUpAfterThreeIncompleteAnswersAndStillDeletesTheUpload()
+    {
+        int interactions = 0;
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => Transcribe(() => { interactions++; return "{\"id\":\"interactions/1\",\"status\":\"incomplete\"}"; }));
+        Assert.Contains("\"incomplete\" 3 times", ex.Message, StringComparison.Ordinal);
+        Assert.Equal(3, interactions);
+    }
+
+    private static async Task<(FakeHttp Http, Transcription Result)> Transcribe(Func<string> interactionAnswer)
+    {
+        string chunk = Path.GetTempFileName();
+        File.WriteAllBytes(chunk, [1, 2, 3]);
+        var http = new FakeHttp(request =>
+        {
+            string url = request.RequestUri!.ToString();
+            if (url.EndsWith("upload/v1beta/files", StringComparison.Ordinal))
+            {
+                var started = FakeHttp.Json("{}");
+                started.Headers.Add("X-Goog-Upload-URL", "https://upload.test/u1");
+                return started;
+            }
+
+            if (url.StartsWith("https://upload.test/", StringComparison.Ordinal))
+            {
+                return FakeHttp.Json("{\"file\":{\"name\":\"files/abc\",\"uri\":\"https://generativelanguage.googleapis.com/v1beta/files/abc\",\"state\":\"ACTIVE\"}}");
+            }
+
+            return FakeHttp.Json(url.EndsWith("v1beta/interactions", StringComparison.Ordinal) ? interactionAnswer() : "{}");
+        });
+        try
+        {
+            var gemini = new GeminiProvider(http) { RetryPause = TimeSpan.Zero };
+            var config = new Configuration.PluginConfiguration { GeminiApiKey = "k", GeminiAudioTokensPerMinute = 10_000_000 };
+            var result = await gemini.TranscribeAsync(new Media.AudioChunk(chunk, TimeSpan.Zero, TimeSpan.FromMinutes(6)), config, CancellationToken.None);
+            return (http, result);
+        }
+        finally
+        {
+            Assert.Contains(http.Requests, r => r.StartsWith("DELETE", StringComparison.Ordinal));
+            File.Delete(chunk);
+        }
+    }
+}
+
+/// <summary>An HTTP client factory whose answers the test decides.</summary>
+internal sealed class FakeHttp : IHttpClientFactory
+{
+    private readonly Func<HttpRequestMessage, HttpResponseMessage> _respond;
+
+    public FakeHttp(Func<HttpRequestMessage, HttpResponseMessage> respond) => _respond = respond;
+
+    public List<string> Requests { get; } = [];
+
+    public static HttpResponseMessage Json(string body) =>
+        new(System.Net.HttpStatusCode.OK) { Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json") };
+
+    public HttpClient CreateClient(string name) => new(new Handler(this));
+
+    private sealed class Handler : HttpMessageHandler
+    {
+        private readonly FakeHttp _owner;
+
+        public Handler(FakeHttp owner) => _owner = owner;
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            lock (_owner.Requests)
+            {
+                _owner.Requests.Add(request.Method + " " + request.RequestUri);
+            }
+
+            return Task.FromResult(_owner._respond(request));
+        }
+    }
+}

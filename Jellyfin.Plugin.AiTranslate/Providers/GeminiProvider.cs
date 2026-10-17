@@ -20,6 +20,7 @@ namespace Jellyfin.Plugin.AiTranslate.Providers;
 public sealed class GeminiProvider : ITranscriber, ITranslator, IDisposable
 {
     private const string BaseUrl = "https://generativelanguage.googleapis.com/";
+    private const int MaxTranscribeAttempts = 3;
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(5);
     private readonly IHttpClientFactory _httpClientFactory;
 
@@ -27,6 +28,9 @@ public sealed class GeminiProvider : ITranscriber, ITranslator, IDisposable
     {
         _httpClientFactory = httpClientFactory;
     }
+
+    /// <summary>Gets the pause before a transcription that ended "incomplete" is asked for again (tests use zero).</summary>
+    internal TimeSpan RetryPause { get; init; } = TimeSpan.FromSeconds(10);
 
     // Gemini bills audio input at 25 tokens per second.
     private const double AudioTokensPerSecond = 25;
@@ -82,43 +86,46 @@ public sealed class GeminiProvider : ITranscriber, ITranslator, IDisposable
                     },
                 },
             };
-            string body;
-            await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-            try
+            // A running or failed interaction has no words (or only some): never pass it on as a silent chunk — the
+            // transcript is cached, so the gap would stay in every subtitle made from it. "incomplete"/"failed" is a
+            // passing fault on Google's side (measured: the same chunk came back complete right after), so ask again.
+            string body = string.Empty;
+            string? status = null;
+            int attempts = 0;
+            while (attempts < MaxTranscribeAttempts)
             {
-                var wait = _nextAllowedUtc - DateTime.UtcNow;
-                if (wait > TimeSpan.Zero)
+                attempts++;
+                body = await StartInteractionAsync(payload, chunk, config, cancellationToken).ConfigureAwait(false);
+
+                // Long audio may come back as a running interaction; poll until it completes.
+                for (int i = 0; i < 360 && IsUnfinished(Status(body)); i++)
                 {
-                    await Task.Delay(wait, cancellationToken).ConfigureAwait(false);
+                    await Task.Delay(PollInterval, cancellationToken).ConfigureAwait(false);
+                    string interaction = "v1beta/" + InteractionId(body);
+                    body = await RateLimit.RetryAsync(() => SendJsonAsync(HttpMethod.Get, interaction, null, config, cancellationToken), cancellationToken).ConfigureAwait(false);
                 }
 
-                body = await RateLimit.RetryAsync(() => SendJsonAsync(HttpMethod.Post, "v1beta/interactions", payload, config, cancellationToken), cancellationToken).ConfigureAwait(false);
-                double tokens = chunk.Duration.TotalSeconds * AudioTokensPerSecond;
-                _nextAllowedUtc = DateTime.UtcNow + TimeSpan.FromMinutes(tokens / Math.Max(1000, config.GeminiAudioTokensPerMinute));
-            }
-            finally
-            {
-                _gate.Release();
+                status = Status(body);
+                if (!IsUnfinished(status) && !IsFailed(status))
+                {
+                    break;
+                }
+
+                if (attempts < MaxTranscribeAttempts)
+                {
+                    await Task.Delay(RetryPause, cancellationToken).ConfigureAwait(false);
+                }
             }
 
-            // Long audio may come back as a running interaction; poll until it completes.
-            for (int i = 0; i < 360 && IsUnfinished(Status(body)); i++)
+            if (IsUnfinished(status) || IsFailed(status))
             {
-                await Task.Delay(PollInterval, cancellationToken).ConfigureAwait(false);
-                string interaction = "v1beta/" + InteractionId(body);
-                body = await RateLimit.RetryAsync(() => SendJsonAsync(HttpMethod.Get, interaction, null, config, cancellationToken), cancellationToken).ConfigureAwait(false);
-            }
-
-            // A running or failed interaction has no words (or only some): never pass it on as a silent chunk —
-            // the transcript is cached, so the gap would stay in every subtitle made from it.
-            string? status = Status(body);
-            if (IsUnfinished(status) || status is "failed" or "cancelled" or "canceled" or "incomplete" or "expired")
-            {
-                throw new HttpRequestException(string.Create(CultureInfo.InvariantCulture, $"Gemini transcription of {chunk.Offset:hh\\:mm\\:ss} ended as \"{status}\": {(body.Length > 300 ? body[..300] : body)}"));
+                throw new HttpRequestException(string.Create(CultureInfo.InvariantCulture, $"Gemini transcription of {chunk.Offset:hh\\:mm\\:ss} ended as \"{status}\" {attempts} times: {(body.Length > 300 ? body[..300] : body)}"));
             }
 
             var words = ParseWordInfo(body);
-            double minutes = chunk.Duration.TotalMinutes;
+
+            // Every attempt sent the whole chunk: all of them count.
+            double minutes = chunk.Duration.TotalMinutes * attempts;
             return new Transcription(CueTools.GroupWords(words), null, new Usage(Id, config.GeminiTranscribeModel, minutes, 0, 0, minutes * config.PriceGeminiTranscribePerMinute));
         }
         finally
@@ -131,6 +138,29 @@ public sealed class GeminiProvider : ITranscriber, ITranslator, IDisposable
             {
                 // Files expire on their own after 48 hours; a failed clean-up must not hide the result.
             }
+        }
+    }
+
+    /// <summary>Sends the transcription request, one at a time and paced to the tier's audio tokens per minute.</summary>
+    private async Task<string> StartInteractionAsync(JsonObject payload, AudioChunk chunk, PluginConfiguration config, CancellationToken cancellationToken)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var wait = _nextAllowedUtc - DateTime.UtcNow;
+            if (wait > TimeSpan.Zero)
+            {
+                await Task.Delay(wait, cancellationToken).ConfigureAwait(false);
+            }
+
+            string body = await RateLimit.RetryAsync(() => SendJsonAsync(HttpMethod.Post, "v1beta/interactions", payload, config, cancellationToken), cancellationToken).ConfigureAwait(false);
+            double tokens = chunk.Duration.TotalSeconds * AudioTokensPerSecond;
+            _nextAllowedUtc = DateTime.UtcNow + TimeSpan.FromMinutes(tokens / Math.Max(1000, config.GeminiAudioTokensPerMinute));
+            return body;
+        }
+        finally
+        {
+            _gate.Release();
         }
     }
 
@@ -243,6 +273,8 @@ public sealed class GeminiProvider : ITranscriber, ITranslator, IDisposable
         TimeSpan.FromSeconds(double.Parse((value ?? "0").TrimEnd('s'), NumberStyles.Float, CultureInfo.InvariantCulture));
 
     private static bool IsUnfinished(string? status) => status is "in_progress" or "queued" or "running";
+
+    private static bool IsFailed(string? status) => status is "failed" or "cancelled" or "canceled" or "incomplete" or "expired";
 
     private static string? Status(string body)
     {

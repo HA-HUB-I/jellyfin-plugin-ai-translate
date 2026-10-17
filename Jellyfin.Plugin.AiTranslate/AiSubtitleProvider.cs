@@ -336,6 +336,7 @@ public sealed partial class AiSubtitleProvider : ISubtitleProvider
                 }
                 else
                 {
+                    _logger.LogWarning(finished.Exception?.GetBaseException(), "AI Translate: {Title} → {Lang} failed", job.Title, job.TargetLanguage);
                     string reason = finished.Exception?.GetBaseException().Message ?? "прекъснато";
                     content = $"1\n00:00:00,000 --> 09:59:59,000\n{FailedMarker} субтитрите не успяха.\n{(reason.Length > 120 ? reason[..120] : reason)}\n";
                     message = $"Субтитрите за „{job.Title}“ не успяха: {reason}";
