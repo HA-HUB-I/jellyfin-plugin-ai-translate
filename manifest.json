@@ -9,6 +9,14 @@
     "category": "General",
     "versions": [
       {
+        "version": "0.2.3.0",
+        "changelog": "- Finished subtitles go into one file, not one per earlier try\n- manifest: 0.2.2.0",
+        "targetAbi": "12.2.0.0",
+        "sourceUrl": "https://github.com/HA-HUB-I/jellyfin-plugin-ai-translate/releases/download/v0.2.3/ai-translate_0.2.3.0.zip",
+        "checksum": "cc77406b4de4f47ef086233be519b0d3",
+        "timestamp": "2026-10-17T20:51:20Z"
+      },
+      {
         "version": "0.2.2.0",
         "changelog": "- Audio: original-language track instead of a dubbed default; halve stuck pieces\n- manifest: 0.2.1.0",
         "targetAbi": "12.2.0.0",
