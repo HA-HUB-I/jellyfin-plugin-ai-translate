@@ -1,5 +1,7 @@
 # AI Translate for Jellyfin
 
+![AI Translate](images/logo.png)
+
 Subtitles for films that have none: Jellyfin extracts the audio, a speech-recognition model writes down
 what is said (with timings), and an LLM translates it into your language, as a film subtitler would.
 
@@ -38,7 +40,7 @@ found none. Finished AI subtitles are always listed (free).
    - Google `gemini-3.5-transcribe` (word timestamps).
    The transcript is cached: a second translator or another language only pays for the translation.
 3. **Translation** in batches of 50 lines with the preceding lines as context, structured JSON output,
-   validated line by line (no merged or dropped lines), retried on errors. The film can be in any language;
+   validated line by line (no merged or dropped lines), retried on temporary errors. The film can be in any language;
    if it is already in the target language, translation is skipped.
 4. **Subtitles**: lines are wrapped to ≤ 2 × 42 characters and handed to Jellyfin, which saves them next to
    the film (or in its metadata folder) like any downloaded subtitle.
@@ -100,12 +102,15 @@ Providers limit how much you may use per minute and per day, and every job costs
 
 | Risk | What the plugin does |
 |---|---|
-| Spending too much | **Monthly budget** (default $10): a job whose estimate would exceed it is refused. Every request is written to a cost log (settings page, per provider and model). |
+| Spending too much | **Monthly budget** (default $10): a job whose estimate would exceed it is refused. The estimates of running jobs are held, so several jobs started together cannot pass it either. Every request is written to a cost log (settings page, per provider and model). |
 | Paying by accident | Subtitle search shows the **price before you choose**; automatic subtitle downloads (library scans) never start a paid job; dubbing is manual only. |
 | Requests per minute (Gemini Transcribe: 10 000 audio tokens/min; Gemini TTS: 10 requests/min on Tier 1) | Requests are **paced** to the configured limit; a `429` with "retry in Ns" is retried after that time. |
 | Requests per day (Gemini TTS: 100/day on Tier 1) | Lines are **batched ~10 per request** (a film needs ~60–70). Requests are **counted per day**; the estimate shows "today X / 100" and warns in red when a film needs more than is left. Start is refused when nothing is left. A daily-quota `429` stops the job at once (no pointless retries) with a message saying when the quota resets (00:00 UTC). |
-| Losing work when a limit hits | Every recognised transcript, translation and spoken line is **cached on disk**. Running the same job again continues where it stopped and does not pay again for what is done. |
+| Losing work when a limit hits | Every recognised audio chunk, translated batch and spoken line is **cached on disk** as soon as it is done. Running the same job again continues where it stopped and does not pay again for what is done; what was paid is in the cost log even when a job stops. |
+| A broken key, an empty balance, an outage | The job **stops with the provider's message** (rate limits and server errors 500/502/503/504 are retried first). Untranslated lines are never saved as a translation. A failed job leaves a one-line note in the subtitle, and picking the subtitle again retries it. |
 | Client gives up waiting (subtitles) | The job keeps running; Jellyfin still saves the subtitle when it finishes. |
+| A job you no longer want | **Спри** next to every running job on the settings page (subtitles and voice-overs). What is finished stays cached; picking it again continues from there. |
+| Disk space | Finished subtitles and transcripts stay while the film is in the library. Spoken lines of voice-overs (~100 MB per film) are deleted when unused for 30 days or over 2 GB, least recently used first; unfinished jobs after 14 days. A daily task (04:00) does it; the settings page shows the space per kind with **Изчисти** buttons. |
 
 Limits differ per account tier and change over time; set yours in **Models and prices** (requests per
 minute/day, tokens per minute, prices). Google shows your actual limits in AI Studio → Rate limits.

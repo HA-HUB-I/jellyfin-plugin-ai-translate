@@ -11,11 +11,14 @@ from datetime import datetime, timezone
 PLUGIN = {
     "guid": "4cad7295-fa8b-46c9-a2e0-b6e5abe8a234",
     "name": "AI Translate",
-    "overview": "Subtitles from the audio track: speech recognition + LLM translation, priced before you choose",
+    "overview": "AI subtitles and voice-over: translate a subtitle or recognise the audio, priced before you choose",
     "description": (
-        "Adds an AI subtitle provider to Jellyfin's subtitle search. Speech recognition (OpenAI, Google Gemini) "
-        "and LLM translation into any language, with a price estimate per film, a monthly budget and a cost log."
+        "Adds an AI subtitle provider to Jellyfin's subtitle search: translates an existing subtitle (embedded, external "
+        "or from another provider) or recognises the speech in the audio track (OpenAI, Google Gemini) and translates it "
+        "with an LLM. Shows the estimated price before you choose; monthly budget, cost log, stop button and disk "
+        "clean-up. Also makes a TV-style AI voice-over audio track from subtitles in your language."
     ),
+    "imageUrl": "https://raw.githubusercontent.com/HA-HUB-I/jellyfin-plugin-ai-translate/main/images/logo.png",
     "owner": "HA-HUB-I",
     "category": "General",
 }

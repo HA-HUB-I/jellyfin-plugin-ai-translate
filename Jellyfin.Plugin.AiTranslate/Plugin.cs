@@ -27,7 +27,7 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
     public override Guid Id => PluginId;
 
     public override string Description =>
-        "Generates subtitles from a film's audio with speech recognition (OpenAI, Google) and translates them with an LLM. Shows up in Jellyfin's subtitle search with the price before you choose.";
+        "AI subtitles in your language: translates an existing subtitle or recognises the film's audio (OpenAI, Google Gemini) and translates it with an LLM, in Jellyfin's subtitle search with the price before you choose. Also makes a TV-style AI voice-over track.";
 
     public IEnumerable<PluginPageInfo> GetPages()
     {

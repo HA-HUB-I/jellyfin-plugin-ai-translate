@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+  <!-- AI Translate for Jellyfin: speech (waveform) becomes subtitles on a screen; A→Б = translation; sparkle = AI. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0c1327"/>
+      <stop offset="1" stop-color="#1c1036"/>
+    </linearGradient>
+    <radialGradient id="glowBlue" cx="380" cy="400" r="430" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#00a4dc" stop-opacity="0.30"/>
+      <stop offset="1" stop-color="#00a4dc" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowPurple" cx="1040" cy="170" r="420" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#aa5cc3" stop-opacity="0.24"/>
+      <stop offset="1" stop-color="#aa5cc3" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="jf" x1="150" y1="240" x2="610" y2="560" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#aa5cc3"/>
+      <stop offset="1" stop-color="#00a4dc"/>
+    </linearGradient>
+    <linearGradient id="wave" x1="190" y1="0" x2="570" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#c77ee0"/>
+      <stop offset="1" stop-color="#27c0f5"/>
+    </linearGradient>
+    <linearGradient id="badge" x1="530" y1="170" x2="680" y2="320" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#b864d4"/>
+      <stop offset="1" stop-color="#0094d6"/>
+    </linearGradient>
+    <linearGradient id="screen" x1="0" y1="240" x2="0" y2="560" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#16203d"/>
+      <stop offset="1" stop-color="#0e1530"/>
+    </linearGradient>
+    <linearGradient id="word" x1="720" y1="0" x2="900" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#c77ee0"/>
+      <stop offset="1" stop-color="#27c0f5"/>
+    </linearGradient>
+    <filter id="soft" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="10"/>
+    </filter>
+  </defs>
+
+  <rect width="1280" height="720" fill="url(#bg)"/>
+  <rect width="1280" height="720" fill="url(#glowBlue)"/>
+  <rect width="1280" height="720" fill="url(#glowPurple)"/>
+
+  <!-- screen -->
+  <rect x="150" y="240" width="460" height="320" rx="42" fill="url(#jf)" opacity="0.35" filter="url(#soft)"/>
+  <rect x="150" y="240" width="460" height="320" rx="42" fill="url(#screen)" stroke="url(#jf)" stroke-width="10"/>
+
+  <!-- speech -->
+  <g fill="url(#wave)">
+    <rect x="191" y="345" width="14" height="30" rx="7"/>
+    <rect x="217" y="330" width="14" height="60" rx="7"/>
+    <rect x="243" y="310" width="14" height="100" rx="7"/>
+    <rect x="269" y="325" width="14" height="70" rx="7"/>
+    <rect x="295" y="295" width="14" height="130" rx="7"/>
+    <rect x="321" y="315" width="14" height="90" rx="7"/>
+    <rect x="347" y="285" width="14" height="150" rx="7"/>
+    <rect x="373" y="305" width="14" height="110" rx="7"/>
+    <rect x="399" y="325" width="14" height="70" rx="7"/>
+    <rect x="425" y="300" width="14" height="120" rx="7"/>
+    <rect x="451" y="320" width="14" height="80" rx="7"/>
+    <rect x="477" y="335" width="14" height="50" rx="7"/>
+    <rect x="503" y="315" width="14" height="90" rx="7"/>
+    <rect x="529" y="340" width="14" height="40" rx="7"/>
+    <rect x="555" y="350" width="14" height="20" rx="7"/>
+  </g>
+
+  <!-- … becomes subtitles -->
+  <rect x="215" y="458" width="330" height="30" rx="15" fill="#ffffff"/>
+  <rect x="262" y="502" width="236" height="30" rx="15" fill="#ffffff" opacity="0.78"/>
+
+  <!-- translation badge -->
+  <circle cx="606" cy="244" r="86" fill="#0c1327"/>
+  <circle cx="606" cy="244" r="76" fill="url(#badge)"/>
+  <text x="578" y="240" text-anchor="middle" font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif" font-size="58" font-weight="700" fill="#ffffff" opacity="0.92">A</text>
+  <text x="632" y="290" text-anchor="middle" font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif" font-size="66" font-weight="800" fill="#ffffff">Б</text>
+
+  <!-- AI sparkles -->
+  <path d="M478 112 Q478 162 528 162 Q478 162 478 212 Q478 162 428 162 Q478 162 478 112 Z" fill="#ffffff"/>
+  <path d="M478 112 Q478 162 528 162 Q478 162 478 212 Q478 162 428 162 Q478 162 478 112 Z" fill="#ffffff" opacity="0.6" filter="url(#soft)"/>
+  <path d="M712 128 Q712 148 732 148 Q712 148 712 168 Q712 148 692 148 Q712 148 712 128 Z" fill="#c9d8ff" opacity="0.9"/>
+
+  <!-- wordmark -->
+  <text x="716" y="352" font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif" font-size="150" font-weight="800" fill="url(#word)" letter-spacing="-2">AI</text>
+  <text x="720" y="458" font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif" font-size="98" font-weight="700" fill="#ffffff" letter-spacing="-1">Translate</text>
+  <text x="723" y="522" font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif" font-size="34" font-weight="600" fill="#a9b6d8" letter-spacing="1">субтитри · превод · дублаж</text>
+</svg>
