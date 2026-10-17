@@ -205,28 +205,29 @@ public sealed partial class AiSubtitleProvider : ISubtitleProvider
     internal static string Placeholder(string eta) =>
         $"1\n00:00:00,000 --> 09:59:59,000\n{PendingMarker} субтитрите се генерират (~{eta}).\nЩе се сменят с истинските автоматично.\n";
 
-    /// <summary>Writes the finished subtitles (or the error) over every placeholder (or earlier error note) among the files.</summary>
+    /// <summary>
+    /// Writes the finished subtitles (or the error note) over the newest placeholder among the files — the one this job
+    /// left — and deletes the older ones (notes of earlier failed tries), so the player shows one track, not one per try.
+    /// Returns how many files were changed.
+    /// </summary>
     internal static int ReplacePlaceholders(IEnumerable<string> candidateFiles, string content)
     {
-        int replaced = 0;
-        foreach (var file in candidateFiles.Distinct(StringComparer.Ordinal))
+        var placeholders = candidateFiles.Distinct(StringComparer.Ordinal).Where(IsPlaceholder).OrderByDescending(File.GetLastWriteTimeUtc).ToList();
+        if (placeholders.Count == 0)
         {
-            if (!IsPlaceholder(file))
-            {
-                continue;
-            }
-
-            try
-            {
-                File.WriteAllText(file, content, new UTF8Encoding(false));
-                replaced++;
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-            }
+            return 0;
         }
 
-        return replaced;
+        try
+        {
+            File.WriteAllText(placeholders[0], content, new UTF8Encoding(false));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return 0;
+        }
+
+        return 1 + RemovePlaceholders(placeholders.Skip(1));
     }
 
     /// <summary>Deletes the placeholders (and earlier error notes) among the files.</summary>

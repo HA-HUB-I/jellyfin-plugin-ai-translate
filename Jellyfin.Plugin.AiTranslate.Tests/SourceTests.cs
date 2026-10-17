@@ -229,10 +229,16 @@ public class SourceTests
             var candidates = AiSubtitleProvider.PlaceholderCandidates(F("Show S01E01.mkv"), "bg", [], [dir, dir]);
             Assert.Equal(["Show S01E01.bg.0.srt", "Show S01E01.bg.srt", "Show S01E01.bul.srt"], candidates.Select(System.IO.Path.GetFileName).Order(StringComparer.Ordinal));
 
-            // The finished episode 1 (also over its earlier "failed" note); episode 2 keeps waiting for its own job.
+            // The finished episode 1 goes into its newest placeholder, its older placeholder and "failed" note are removed
+            // (measured on The Old Guard 2: the same subtitles had landed in 3 files); episode 2 keeps waiting for its job.
+            System.IO.File.SetLastWriteTimeUtc(F("Show S01E01.bg.srt"), DateTime.UtcNow.AddMinutes(-30));
+            System.IO.File.SetLastWriteTimeUtc(F("Show S01E01.bg.0.srt"), DateTime.UtcNow.AddMinutes(-20));
+            System.IO.File.SetLastWriteTimeUtc(F("Show S01E01.bul.srt"), DateTime.UtcNow);
             Assert.Equal(3, AiSubtitleProvider.ReplacePlaceholders(candidates, "1\n00:00:01,000 --> 00:00:02,000\nЗдравей\n"));
+            Assert.Contains("Здравей", System.IO.File.ReadAllText(F("Show S01E01.bul.srt")), StringComparison.Ordinal);
+            Assert.False(System.IO.File.Exists(F("Show S01E01.bg.srt")));
+            Assert.False(System.IO.File.Exists(F("Show S01E01.bg.0.srt")));
             Assert.True(AiSubtitleProvider.IsPlaceholder(F("Show S01E02.bg.srt")));
-            Assert.False(AiSubtitleProvider.IsPlaceholder(F("Show S01E01.bg.0.srt")));
         }
         finally
         {
