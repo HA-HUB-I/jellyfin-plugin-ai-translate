@@ -23,6 +23,7 @@ public sealed class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<OpenAiTts>();
         serviceCollection.AddSingleton<ModelCatalog>();
         serviceCollection.AddSingleton<Dubbing.DubService>();
+        serviceCollection.AddSingleton<CacheCleaner>();
         serviceCollection.AddSingleton<ISubtitleProvider, AiSubtitleProvider>();
     }
 }

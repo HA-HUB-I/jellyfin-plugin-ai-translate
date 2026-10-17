@@ -42,4 +42,15 @@ public class ModelCatalogTests
         Assert.Equal(["whisper-1", "gpt-transcribe"], lists.Transcribe);
         Assert.Equal(["tts-1-hd", "gpt-4o-mini-tts"], lists.Tts);
     }
+
+    [Fact]
+    public void KeyErrorsShowTheProvidersMessage()
+    {
+        // The settings page used to say only "Gemini 400".
+        Assert.Equal(
+            "Gemini 400: API key not valid. Please pass a valid API key.",
+            ModelCatalog.ErrorText("Gemini", 400, "{\"error\":{\"code\":400,\"message\":\"API key not valid. Please pass a valid API key.\",\"status\":\"INVALID_ARGUMENT\"}}"));
+        Assert.Equal("OpenAI 502: Bad gateway", ModelCatalog.ErrorText("OpenAI", 502, "Bad gateway\n"));
+        Assert.Equal("OpenAI 500", ModelCatalog.ErrorText("OpenAI", 500, string.Empty));
+    }
 }

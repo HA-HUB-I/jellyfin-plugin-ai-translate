@@ -40,7 +40,22 @@
                         <div class="inputContainer">
                             <label class="inputLabel inputLabelUnfocused" for="MonthlyBudgetUsd">Максимум на месец (USD, по оценка)</label>
                             <input id="MonthlyBudgetUsd" type="number" step="any" min="0" is="emby-input" />
-                            <div class="fieldDescription">Задача, която би го надхвърлила, се отказва. 0 = без лимит. Меродавна е фактурата на доставчика.</div>
+                            <div class="fieldDescription">Задача, която би го надхвърлила, се отказва; оценките на текущите задачи се броят веднага, така че и няколко едновременни не могат да го минат. 0 = без лимит. Меродавна е фактурата на доставчика.</div>
+                        </div>
+
+                        <h3>Диск</h3>
+                        <div id="aiCache" class="fieldDescription">…</div>
+                        <button is="emby-button" type="button" id="aiCleanRules" class="raised emby-button"><span>Почисти по правилата</span></button>
+                        <div class="fieldDescription">Всеки ден в 04:00 (Табло → Планирани задачи → AI Translate). Готовите субтитри остават, докато филмът е в библиотеката.</div>
+                        <div class="inputContainer" style="margin-top:1em">
+                            <label class="inputLabel inputLabelUnfocused" for="DubCacheDays">Гласови реплики: изтрий неизползваните след (дни)</label>
+                            <input id="DubCacheDays" type="number" step="any" min="0" is="emby-input" />
+                            <div class="fieldDescription">Реплика, ползвана отново (повторен дублаж, друго издание на филма), не се плаща втори път. 0 = пази ги.</div>
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="DubCacheMaxMb">Гласови реплики: най-много (MB)</label>
+                            <input id="DubCacheMaxMb" type="number" step="any" min="0" is="emby-input" />
+                            <div class="fieldDescription">Над него първо отиват най-отдавна неизползваните. Един дублиран филм ≈ 100 MB. 0 = без лимит.</div>
                         </div>
                     </div>
 
@@ -164,7 +179,7 @@
                                 <h3>Лимити на акаунта</h3>
                                 <div class="fieldDescription">Реалните ти лимити: Google AI Studio → Rate limits.</div>
                                 <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="GeminiTtsRequestsPerMinute">Глас — заявки в минута</label><input id="GeminiTtsRequestsPerMinute" type="number" step="any" min="1" is="emby-input" /><div class="fieldDescription">Tier 1: 10.</div></div>
-                                <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="GeminiTtsRequestsPerDay">Глас — заявки на ден</label><input id="GeminiTtsRequestsPerDay" type="number" step="any" min="1" is="emby-input" /><div class="fieldDescription">Tier 1: 100 (нулира се в 03:00 българско време). Филм ≈ 60–70 заявки.</div></div>
+                                <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="GeminiTtsRequestsPerDay">Глас — заявки на ден</label><input id="GeminiTtsRequestsPerDay" type="number" step="any" min="1" is="emby-input" /><div class="fieldDescription">Tier 1: 100 (нулира се в полунощ UTC — 03:00 лятно / 02:00 зимно българско време). Филм ≈ 60–70 заявки.</div></div>
                                 <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="GeminiAudioTokensPerMinute">Разпознаване — аудио токени в минута</label><input id="GeminiAudioTokensPerMinute" type="number" step="any" min="1000" is="emby-input" /><div class="fieldDescription">Tier 1: 10000 (≈ 6,5 мин аудио в минута).</div></div>
                                 <h3>Цени (USD)</h3>
                                 <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="PriceGeminiTranscribePerMinute">Разпознаване / минута</label><input id="PriceGeminiTranscribePerMinute" type="number" step="any" is="emby-input" /></div>
@@ -220,12 +235,15 @@
                 var checks = ['CompareProviders', 'DubSplitByGender', 'OnlyWhenNoOtherSubtitles', 'PreferExistingSubtitles', 'UseOtherProvidersAsSource', 'StripHearingImpaired', 'DubSkipSongs'];
                 var texts = ['OpenAiApiKey', 'GeminiApiKey', 'TargetLanguages', 'SourceLanguages', 'TranslationInstructions', 'GeminiThinkingLevel', 'OpenAiReasoningEffort', 'DubProvider', 'DubVoice', 'DubVoiceFemale', 'DubStyle', 'ActiveTranslator', 'ActiveTranscriber'];
                 var models = ['GeminiTextModel', 'GeminiTranscribeModel', 'GeminiTtsModel', 'OpenAiTextModel', 'OpenAiTranscribeModel', 'OpenAiTtsModel'];
-                var numbers = ['MonthlyBudgetUsd', 'GeminiTtsRequestsPerMinute', 'GeminiTtsRequestsPerDay', 'GeminiAudioTokensPerMinute', 'OpenAiTtsRequestsPerMinute', 'DubLinesPerRequest', 'DubMaxTempo', 'DubParallelism', 'DubMaleBelowHz', 'DubFemaleAboveHz', 'PriceGeminiTranscribePerMinute', 'PriceGeminiTextInputPerMTok', 'PriceGeminiTextOutputPerMTok', 'PriceGeminiTtsInputPerMTok', 'PriceGeminiTtsAudioPerMTok', 'PriceOpenAiTranscribePerMinute', 'PriceOpenAiTextInputPerMTok', 'PriceOpenAiTextOutputPerMTok', 'PriceOpenAiTtsPerMinute'];
+                var numbers = ['MonthlyBudgetUsd', 'DubCacheDays', 'DubCacheMaxMb', 'GeminiTtsRequestsPerMinute', 'GeminiTtsRequestsPerDay', 'GeminiAudioTokensPerMinute', 'OpenAiTtsRequestsPerMinute', 'DubLinesPerRequest', 'DubMaxTempo', 'DubParallelism', 'DubMaleBelowHz', 'DubFemaleAboveHz', 'PriceGeminiTranscribePerMinute', 'PriceGeminiTextInputPerMTok', 'PriceGeminiTextOutputPerMTok', 'PriceGeminiTtsInputPerMTok', 'PriceGeminiTtsAudioPerMTok', 'PriceOpenAiTranscribePerMinute', 'PriceOpenAiTextInputPerMTok', 'PriceOpenAiTextOutputPerMTok', 'PriceOpenAiTtsPerMinute'];
                 var integers = ['GeminiTtsRequestsPerMinute', 'GeminiTtsRequestsPerDay', 'GeminiAudioTokensPerMinute', 'OpenAiTtsRequestsPerMinute', 'DubLinesPerRequest', 'DubParallelism'];
+                var zeroAllowed = ['DubCacheDays', 'DubCacheMaxMb'];
                 var page = document.querySelector('#AiTranslateConfigPage');
                 var savedConfig = null, modelLists = null, keyInfo = [], voiceProviders = [];
 
                 function $(id) { return page.querySelector('#' + id); }
+                // Daily quotas reset at 00:00 UTC: 03:00 in Bulgarian summer time, 02:00 in winter.
+                function quotaReset() { var d = new Date(); return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1)).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); }
                 function esc(s) { var d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
                 function api(method, path) { return ApiClient.ajax({ type: method, url: ApiClient.getUrl(path), dataType: method === 'GET' ? 'json' : undefined }); }
 
@@ -246,16 +264,55 @@
                 // --- status ---
                 function loadStatus() {
                     api('GET', 'AiTranslate/Status').then(function (s) {
-                        var html = '<b>$' + s.MonthTotalUsd.toFixed(2) + '</b>' + (s.BudgetUsd > 0 ? ' от $' + s.BudgetUsd.toFixed(2) : '') + ' този месец (по оценка).';
+                        var html = '<b>$' + s.MonthTotalUsd.toFixed(2) + '</b>' + (s.BudgetUsd > 0 ? ' от $' + s.BudgetUsd.toFixed(2) : '') + ' този месец (по оценка).' +
+                            (s.ReservedUsd > 0 ? ' Запазени за текущите задачи: ≈ $' + s.ReservedUsd.toFixed(2) + '.' : '');
                         (s.ByProvider || []).forEach(function (p) {
                             html += '<br>' + esc(p.Name) + ': $' + p.CostUsd.toFixed(3) + (p.Minutes ? ' · ' + p.Minutes.toFixed(1) + ' мин аудио' : '') + (p.InputTokens ? ' · ' + p.InputTokens + ' вх. / ' + p.OutputTokens + ' изх. токена' : '');
                         });
                         (s.Running || []).forEach(function (j) {
-                            html += '<br>' + (j.Stage.indexOf('грешка') === 0 ? '⚠ ' : '⏳ ') + esc(j.Title) + ' → ' + esc(j.TargetLanguage) + ' (' + esc(j.Combination) + '): ' + esc(j.Stage);
+                            html += '<br>' + (j.Running ? '⏳ ' : '⚠ ') + esc(j.Title) + ' → ' + esc(j.TargetLanguage) + ' (' + esc(j.Combination) + '): ' + esc(j.Stage) +
+                                (j.Id ? ' <button is="emby-button" type="button" class="emby-button aiJob" data-id="' + esc(j.Id) + '">' + (j.Running ? 'Спри' : 'Скрий') + '</button>' : '');
                         });
                         $('aiStatus').innerHTML = html;
                     });
                 }
+
+                // Stop a running job (finished parts stay cached) or hide the note of one that ended.
+                $('aiStatus').addEventListener('click', function (e) {
+                    var b = e.target.closest('.aiJob');
+                    if (!b) { return; }
+                    b.disabled = true;
+                    api('POST', 'AiTranslate/Jobs/' + encodeURIComponent(b.getAttribute('data-id')) + '/Cancel').then(loadStatus, loadStatus);
+                });
+
+                // --- disk ---
+                var cacheLabels = { subtitles: 'Готови субтитри и транскрипти', voice: 'Гласови реплики (дублаж)', resume: 'Недовършени задачи', temp: 'Временни файлове' };
+                function mb(bytes) { return (bytes / 1048576).toFixed(bytes < 10485760 ? 1 : 0) + ' MB'; }
+                function loadCache() {
+                    api('GET', 'AiTranslate/Cache').then(function (list) {
+                        $('aiCache').innerHTML = (list || []).map(function (c) {
+                            return esc(cacheLabels[c.Kind] || c.Kind) + ': <b>' + mb(c.Bytes) + '</b> (' + c.Files + ' файла)' +
+                                (c.Files ? ' <button is="emby-button" type="button" class="emby-button aiClear" data-kind="' + esc(c.Kind) + '">Изчисти</button>' : '');
+                        }).join('<br>');
+                    });
+                }
+
+                function clean(kind) {
+                    return ApiClient.ajax({ type: 'POST', url: ApiClient.getUrl('AiTranslate/Cache/Clean?kind=' + encodeURIComponent(kind)), dataType: 'json' }).then(function (r) {
+                        Dashboard.alert({ message: 'Изтрити: ' + r.Files + ' файла, ' + mb(r.Bytes) + '.' });
+                        loadCache();
+                    });
+                }
+
+                $('aiCache').addEventListener('click', function (e) {
+                    var b = e.target.closest('.aiClear');
+                    if (!b) { return; }
+                    var kind = b.getAttribute('data-kind');
+                    var warn = kind === 'subtitles' ? 'Готовите AI субтитри и транскриптите ще се изтрият — нов избор ще ги плати отново. Продължаваш ли?'
+                        : kind === 'voice' ? 'Гласовите реплики ще се изтрият — повторен дублаж ще ги плати отново. Продължаваш ли?' : null;
+                    if (!warn || window.confirm(warn)) { clean(kind); }
+                });
+                $('aiCleanRules').addEventListener('click', function () { clean('rules'); });
 
                 // --- providers: key status, active-provider selects (only working keys) ---
                 function applyKeyInfo() {
@@ -318,7 +375,7 @@
                     fillVoiceSelect($('DubVoiceFemale'), p, savedConfig && savedConfig.DubVoiceFemale);
                     $('dubFemaleBox').style.display = $('DubSplitByGender').checked ? '' : 'none';
                     $('dubQuota').innerHTML = !p ? 'Въведи работещ API ключ в таб „Доставчици“.' :
-                        p.RequestsPerDay ? ('Днес: <b>' + p.UsedToday + ' / ' + p.RequestsPerDay + '</b> заявки (нулира се в 03:00). ~10 реплики на заявка → ~1 филм на ден.') : 'Без дневен лимит.';
+                        p.RequestsPerDay ? ('Днес: <b>' + p.UsedToday + ' / ' + p.RequestsPerDay + '</b> заявки (нулира се в ' + quotaReset() + '). ~10 реплики на заявка → ~1 филм на ден.') : 'Без дневен лимит.';
                 }
 
                 function loadVoiceProviders() {
@@ -336,7 +393,7 @@
                     var box = $('dubResults');
                     box.innerHTML = '…';
                     api('GET', 'AiTranslate/Dub/Candidates?language=bg&search=' + encodeURIComponent(q)).then(function (items) {
-                        if (!items.length) { box.innerHTML = 'Няма филми с български текстови субтитри за „' + esc(q) + '“.'; return; }
+                        if (!items.length) { box.innerHTML = 'Няма филми с български текстови субтитри' + (q ? ' за „' + esc(q) + '“' : '') + '.'; return; }
                         box.innerHTML = items.map(function (it) {
                             return '<div style="margin:.5em 0"><b>' + esc(it.Name) + '</b> ' + (it.ProductionYear || '') + (it.Exists ? ' · <i>вече има дублаж</i>' : '') +
                                 ' <button is="emby-button" type="button" class="emby-button dubEst" data-id="' + it.Id + '">Цена</button>' +
@@ -397,6 +454,7 @@
                         loadModels();
                     }, function () { Dashboard.hideLoadingMsg(); });
                     loadStatus();
+                    loadCache();
                     timer = setInterval(loadStatus, 10000);
                 });
                 page.addEventListener('pagehide', function () { if (timer) { clearInterval(timer); timer = null; } });
@@ -414,6 +472,7 @@
                         models.forEach(function (k) { if ($(k).value) { config[k] = $(k).value; } });
                         numbers.forEach(function (k) { var v = parseFloat(String($(k).value).replace(',', '.')); if (!isNaN(v)) { config[k] = v; } });
                         integers.forEach(function (k) { config[k] = Math.max(1, Math.round(config[k])); });
+                        zeroAllowed.forEach(function (k) { config[k] = Math.max(0, Math.round(config[k])); });
                         return ApiClient.updatePluginConfiguration(pluginId, config);
                     }).then(function (result) {
                         Dashboard.processPluginConfigurationUpdateResult(result);

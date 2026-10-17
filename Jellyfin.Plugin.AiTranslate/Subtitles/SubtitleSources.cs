@@ -42,12 +42,14 @@ public static partial class SubtitleSources
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
     }
 
+    /// <summary>Whether a subtitle stream is text (not DVD/Blu-ray pictures).</summary>
+    public static bool IsTextCodec(string? codec) => TextCodecs.Contains(codec ?? string.Empty, StringComparer.OrdinalIgnoreCase);
+
     /// <summary>Text subtitle streams of the item in other languages, best first (preferred languages, not forced, not SDH).</summary>
     public static List<SubtitleSource> FromStreams(IEnumerable<MediaStream> streams, string targetLanguage, IReadOnlyList<string> preferredLanguages)
     {
         return streams
-            .Where(s => s.Type == MediaStreamType.Subtitle && !s.IsForced && !string.IsNullOrEmpty(s.Language)
-                && TextCodecs.Contains(s.Codec ?? string.Empty, StringComparer.OrdinalIgnoreCase))
+            .Where(s => s.Type == MediaStreamType.Subtitle && !s.IsForced && !string.IsNullOrEmpty(s.Language) && IsTextCodec(s.Codec))
             .Select(s => (Stream: s, Lang: Languages.ToTwoLetter(s.Language!)))
             .Where(x => x.Lang != targetLanguage && x.Lang.Length == 2)
             .Select(x => new SubtitleSource(
@@ -66,23 +68,30 @@ public static partial class SubtitleSources
         return ((lang < 0 ? preferredLanguages.Count : lang) * 10) + (s.HearingImpaired ? 1 : 0) + (s.Kind == SourceKind.Embedded ? 2 : 0);
     }
 
-    /// <summary>Reads subtitle text in any common format/encoding and returns clean cues.</summary>
-    public static async Task<List<Cue>> ReadAsync(string path, string ffmpegPath, string workDir, bool stripHearingImpaired, CancellationToken cancellationToken)
+    /// <summary>
+    /// Reads subtitle text in any common format/encoding and returns clean cues. <paramref name="language"/> (if known)
+    /// picks the legacy code page of files that are not Unicode.
+    /// </summary>
+    public static async Task<List<Cue>> ReadAsync(string path, string ffmpegPath, string workDir, bool stripHearingImpaired, string? language, CancellationToken cancellationToken)
     {
-        string srtPath = path;
+        string text = DecodeText(await System.IO.File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false), language);
         if (!path.EndsWith(".srt", StringComparison.OrdinalIgnoreCase))
         {
-            // ASS/SSA/VTT → SRT.
+            // ASS/SSA/VTT → SRT. ffmpeg reads text subtitles as UTF-8, so it gets the decoded text.
             Directory.CreateDirectory(workDir);
-            srtPath = Path.Combine(workDir, "converted.srt");
-            var r = await AudioExtractor.RunAsync(ffmpegPath, ["-hide_banner", "-nostdin", "-v", "error", "-y", "-i", path, "-c:s", "srt", srtPath], cancellationToken).ConfigureAwait(false);
+            string input = Path.Combine(workDir, "source" + Path.GetExtension(path).ToLowerInvariant());
+            string srtPath = Path.Combine(workDir, "converted.srt");
+            await System.IO.File.WriteAllTextAsync(input, text, new UTF8Encoding(false), cancellationToken).ConfigureAwait(false);
+            var r = await AudioExtractor.RunAsync(ffmpegPath, ["-hide_banner", "-nostdin", "-v", "error", "-y", "-i", input, "-c:s", "srt", srtPath], cancellationToken).ConfigureAwait(false);
             if (r.ExitCode != 0)
             {
                 throw new InvalidOperationException("ffmpeg could not convert the subtitle file: " + r.StdErr);
             }
+
+            text = DecodeText(await System.IO.File.ReadAllBytesAsync(srtPath, cancellationToken).ConfigureAwait(false));
         }
 
-        return Clean(CueTools.ParseSrt(DecodeText(await System.IO.File.ReadAllBytesAsync(srtPath, cancellationToken).ConfigureAwait(false))), stripHearingImpaired);
+        return Clean(CueTools.ParseSrt(text), stripHearingImpaired);
     }
 
     /// <summary>Extracts an embedded text subtitle stream to SRT (reads the file, does not decode video).</summary>
@@ -102,12 +111,20 @@ public static partial class SubtitleSources
         return output;
     }
 
-    /// <summary>UTF-8 (with or without BOM), UTF-16, else Windows-1252.</summary>
-    public static string DecodeText(byte[] bytes)
+    /// <summary>
+    /// UTF-16 (by its BOM), UTF-8 (with or without BOM), else the usual legacy code page of the subtitle's
+    /// <paramref name="language"/>: Windows-1251 for Bulgarian/Russian, 1250 for Central Europe, …, 1252 when unknown.
+    /// </summary>
+    public static string DecodeText(byte[] bytes, string? language = null)
     {
-        if (bytes.Length >= 2 && ((bytes[0] == 0xFF && bytes[1] == 0xFE) || (bytes[0] == 0xFE && bytes[1] == 0xFF)))
+        if (bytes.Length >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE)
         {
-            return Encoding.Unicode.GetString(bytes).TrimStart('﻿');
+            return Encoding.Unicode.GetString(bytes, 2, bytes.Length - 2);
+        }
+
+        if (bytes.Length >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF)
+        {
+            return Encoding.BigEndianUnicode.GetString(bytes, 2, bytes.Length - 2);
         }
 
         try
@@ -116,9 +133,27 @@ public static partial class SubtitleSources
         }
         catch (DecoderFallbackException)
         {
-            return Encoding.GetEncoding(1252).GetString(bytes);
+            return Encoding.GetEncoding(LegacyCodePage(language)).GetString(bytes);
         }
     }
+
+    /// <summary>The Windows code page subtitles in this language were usually saved in before UTF-8.</summary>
+    internal static int LegacyCodePage(string? language) => (string.IsNullOrEmpty(language) ? string.Empty : Languages.ToTwoLetter(language)) switch
+    {
+        "bg" or "ru" or "uk" or "be" or "mk" => 1251,
+        "pl" or "cs" or "sk" or "hu" or "hr" or "sl" or "sr" or "bs" or "ro" or "sq" => 1250,
+        "el" => 1253,
+        "tr" or "az" => 1254,
+        "he" => 1255,
+        "ar" or "fa" or "ur" => 1256,
+        "lt" or "lv" or "et" => 1257,
+        "vi" => 1258,
+        "th" => 874,
+        "ja" => 932,
+        "zh" => 936,
+        "ko" => 949,
+        _ => 1252,
+    };
 
     /// <summary>Removes markup and, optionally, hearing-impaired annotations; drops cues that become empty.</summary>
     public static List<Cue> Clean(IEnumerable<Cue> cues, bool stripHearingImpaired)

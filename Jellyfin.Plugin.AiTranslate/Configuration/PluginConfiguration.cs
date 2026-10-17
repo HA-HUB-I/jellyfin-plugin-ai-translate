@@ -164,4 +164,12 @@ public class PluginConfiguration : BasePluginConfiguration
 
     /// <summary>Gets or sets the TTS audio output price (USD per 1M tokens; 25 tokens per second). Google doubles it from 2027-01-01.</summary>
     public double PriceGeminiTtsAudioPerMTok { get; set; } = 9.0;
+
+    // --- Disk ---
+
+    /// <summary>Gets or sets after how many days without use a spoken line of a voice-over is deleted (0 = keep).</summary>
+    public int DubCacheDays { get; set; } = 30;
+
+    /// <summary>Gets or sets the most space the spoken lines may take, in MB (0 = no limit); the least recently used go first.</summary>
+    public int DubCacheMaxMb { get; set; } = 2000;
 }

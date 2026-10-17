@@ -37,8 +37,11 @@ public sealed record SubtitleJob(
     public string SourceKey => SourceKind == Subtitles.SourceKind.Audio ? TranscriberId : "sub-" + SourceLanguage;
 }
 
-/// <summary>Status of a job for the settings page.</summary>
-public sealed record JobStatus(string Title, string TargetLanguage, string Combination, string Stage, DateTime StartedUtc);
+/// <summary>
+/// Status of a job for the settings page. <paramref name="Id"/> stops a running job (or hides a finished one's note);
+/// <paramref name="Running"/> is false for a job that ended with an error that is kept on show.
+/// </summary>
+public sealed record JobStatus(string Title, string TargetLanguage, string Combination, string Stage, DateTime StartedUtc, string Id = "", bool Running = true);
 
 /// <summary>Runs transcription (or reads existing subtitles) + translation, caches every step and records the cost.</summary>
 public sealed class SubtitleJobService
@@ -56,7 +59,7 @@ public sealed class SubtitleJobService
     private readonly IApplicationPaths _appPaths;
     private readonly IServiceProvider _services;
     private readonly ILogger<SubtitleJobService> _logger;
-    private readonly ConcurrentDictionary<string, Task<string>> _running = new(StringComparer.Ordinal);
+    private readonly SingleFlight<string, string> _flights = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, JobStatus> _status = new(StringComparer.Ordinal);
 
     public SubtitleJobService(
@@ -85,7 +88,7 @@ public sealed class SubtitleJobService
     /// <summary>Gets or sets a configuration used instead of the plugin's (tests only).</summary>
     internal static PluginConfiguration? ConfigOverride { get; set; }
 
-    private string DataFolder => Plugin.Instance?.DataFolderPath ?? Path.Combine(_appPaths.DataPath, "ai-translate");
+    private string DataFolder => PluginData.Folder(_appPaths);
 
     /// <summary>The active translator (or, when comparing, every enabled one) among those with a key.</summary>
     public IEnumerable<ITranslator> AvailableTranslators()
@@ -130,8 +133,7 @@ public sealed class SubtitleJobService
     public string ModelLabel(ITranscriber t, ITranslator x)
     {
         var c = Config;
-        string tm = t.Id == "openai" ? c.OpenAiTranscribeModel : c.GeminiTranscribeModel;
-        return $"{t.DisplayName(c)} {tm} + {TranslatorLabel(x)}";
+        return $"{t.DisplayName(c)} {TranscribeModel(t, c)} + {TranslatorLabel(x)}";
     }
 
     public string TranslatorLabel(ITranslator x)
@@ -139,6 +141,12 @@ public sealed class SubtitleJobService
         var c = Config;
         return $"{x.DisplayName(c)} {(x.Id == "openai" ? c.OpenAiTextModel : c.GeminiTextModel)}";
     }
+
+    private static string TranscribeModel(ITranscriber t, PluginConfiguration c) => t.Id == "openai" ? c.OpenAiTranscribeModel : c.GeminiTranscribeModel;
+
+    // Everything besides the request text that changes a translation: provider, model and thinking level.
+    private static string TranslationCacheKey(ITranslator x, PluginConfiguration c) =>
+        x.Id == "openai" ? $"openai|{c.OpenAiTextModel}|{c.OpenAiReasoningEffort}" : $"gemini|{c.GeminiTextModel}|{c.GeminiThinkingLevel}";
 
     /// <summary>Estimated USD for an audio job; a cached transcript is free.</summary>
     public double Estimate(ITranscriber t, ITranslator x, string mediaPath, TimeSpan duration)
@@ -186,25 +194,39 @@ public sealed class SubtitleJobService
         }
     }
 
-    /// <summary>Starts (or joins) the job. It keeps running if the caller gives up, so a slow client can fetch the result later.</summary>
-    public Task<string> RunAsync(SubtitleJob job)
+    /// <summary>
+    /// Starts (or joins) the job; <paramref name="started"/> is true for the one caller that started it. It keeps running if
+    /// the caller gives up, so a slow client can fetch the result later.
+    /// </summary>
+    public Task<string> RunAsync(SubtitleJob job, out bool started)
     {
-        string key = $"{job.MediaPath}|{job.TargetLanguage}|{job.SourceKey}|{job.TranslatorId}";
-        return _running.GetOrAdd(key, k => Task.Run(async () =>
-        {
-            try
+        string key = JobKey(job);
+        return _flights.Run(
+            key,
+            async cancellationToken =>
             {
-                return await ExecuteAsync(job, k).ConfigureAwait(false);
-            }
-            finally
-            {
-                _running.TryRemove(k, out _);
-                _status.TryRemove(k, out _);
-            }
-        }));
+                try
+                {
+                    return await ExecuteAsync(job, key, cancellationToken).ConfigureAwait(false);
+                }
+                finally
+                {
+                    _status.TryRemove(key, out _);
+                }
+            },
+            out started);
     }
 
-    public bool IsRunning(SubtitleJob job) => _running.ContainsKey($"{job.MediaPath}|{job.TargetLanguage}|{job.SourceKey}|{job.TranslatorId}");
+    public bool IsRunning(SubtitleJob job) => _flights.IsRunning(JobKey(job));
+
+    /// <summary>Stops the running job with this status id; what is finished stays cached, so it can continue later.</summary>
+    public bool Cancel(string id)
+    {
+        var key = _status.FirstOrDefault(s => s.Value.Id == id).Key;
+        return key is not null && _flights.Cancel(key);
+    }
+
+    private static string JobKey(SubtitleJob job) => $"{job.MediaPath}|{job.TargetLanguage}|{job.SourceKey}|{job.TranslatorId}";
 
     /// <summary>Returns the finished file for a cached job id, if any.</summary>
     public string? CachedPath(SubtitleJob job)
@@ -215,7 +237,7 @@ public sealed class SubtitleJobService
 
     internal static string Hash(string s) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(s)))[..16].ToLowerInvariant();
 
-    private async Task<string> ExecuteAsync(SubtitleJob job, string key)
+    private async Task<string> ExecuteAsync(SubtitleJob job, string key, CancellationToken cancellationToken)
     {
         var config = Config;
         var translator = _translators.First(t => t.Id == job.TranslatorId);
@@ -226,24 +248,26 @@ public sealed class SubtitleJobService
         }
 
         var extractor = new AudioExtractor(_mediaEncoder.EncoderPath, _mediaEncoder.ProbePath);
-        var duration = await extractor.GetDurationAsync(job.MediaPath, CancellationToken.None).ConfigureAwait(false);
+        var duration = await extractor.GetDurationAsync(job.MediaPath, cancellationToken).ConfigureAwait(false);
         bool fromAudio = job.SourceKind == SourceKind.Audio;
         ITranscriber? transcriber = fromAudio ? _transcribers.First(t => t.Id == job.TranscriberId) : null;
         string label = transcriber is not null ? ModelLabel(transcriber, translator) : $"{job.SourceKey} + {TranslatorLabel(translator)}";
-        CheckBudget(config, transcriber is not null ? Estimate(transcriber, translator, job.MediaPath, duration) : EstimateTranslation(translator, duration), job.Title);
-        void Stage(string stage) => _status[key] = new JobStatus(job.Title, job.TargetLanguage, label, stage, _status.TryGetValue(key, out var s) ? s.StartedUtc : DateTime.UtcNow);
+        double estimate = transcriber is not null ? Estimate(transcriber, translator, job.MediaPath, duration) : EstimateTranslation(translator, duration);
+        using var budget = Ledger.Reserve(estimate, config.MonthlyBudgetUsd, job.Title, DateTime.UtcNow);
+        string id = "sub-" + Hash(key);
+        void Stage(string stage) => _status[key] = new JobStatus(job.Title, job.TargetLanguage, label, stage, _status.TryGetValue(key, out var s) ? s.StartedUtc : DateTime.UtcNow, id);
 
         // 1) Source text with timings: speech recognition (cached per transcriber) or an existing subtitle.
         List<Cue> cues;
         string? sourceLanguage;
         if (transcriber is not null)
         {
-            (cues, sourceLanguage) = await GetTranscriptAsync(job, transcriber, extractor, config, Stage).ConfigureAwait(false);
+            (cues, sourceLanguage) = await GetTranscriptAsync(job, transcriber, extractor, config, Stage, cancellationToken).ConfigureAwait(false);
         }
         else
         {
             Stage("четене на субтитрите");
-            cues = await ReadSourceSubtitlesAsync(job, config).ConfigureAwait(false);
+            cues = await ReadSourceSubtitlesAsync(job, config, cancellationToken).ConfigureAwait(false);
             sourceLanguage = job.SourceLanguage;
         }
 
@@ -261,41 +285,58 @@ public sealed class SubtitleJobService
         else
         {
             Stage($"превод ({cues.Count} реплики)");
-            var (translated, usage) = await new Translation(_logger)
-                .TranslateAsync(translator, cues, sourceLanguage, job.TargetLanguage, job.Title, config, CancellationToken.None)
-                .ConfigureAwait(false);
-            Record(job, "translate", usage);
-            result = translated;
+            var usage = new List<Usage>();
+            try
+            {
+                result = await new Translation(_logger)
+                    .TranslateAsync(translator, cues, sourceLanguage, job.TargetLanguage, job.Title, config, Path.Combine(MediaFolder(job.MediaPath), "batches"), TranslationCacheKey(translator, config), usage, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            finally
+            {
+                // What was paid for counts against the budget even when the job stops.
+                Record(job, "translate", usage);
+            }
         }
 
         Directory.CreateDirectory(Path.GetDirectoryName(output)!);
-        CueTools.WriteSrt(output, CueTools.Polish(CueTools.Repair(result, joinFragments: fromAudio)));
-        _logger.LogInformation("AI Translate: {Title} → {Lang}: {Count} subtitles ({Combination})", job.Title, job.TargetLanguage, result.Count, label);
+        var final = FinalCues(result, fromAudio);
+        CueTools.WriteSrt(output, final);
+        _logger.LogInformation("AI Translate: {Title} → {Lang}: {Count} subtitles ({Combination})", job.Title, job.TargetLanguage, final.Count, label);
         return output;
     }
 
-    private async Task<List<Cue>> ReadSourceSubtitlesAsync(SubtitleJob job, PluginConfiguration config)
+    /// <summary>
+    /// Recognised speech gets its timings repaired (see <see cref="CueTools.Repair"/>); subtitles made by people keep
+    /// theirs — a cue shown for 10 s is meant to be. Both are re-wrapped and too-short cues are stretched.
+    /// </summary>
+    internal static List<Cue> FinalCues(IReadOnlyList<Cue> cues, bool fromAudio) => CueTools.Polish(fromAudio ? CueTools.Repair(cues) : cues);
+
+    private async Task<List<Cue>> ReadSourceSubtitlesAsync(SubtitleJob job, PluginConfiguration config, CancellationToken cancellationToken)
     {
         var work = Path.Combine(_appPaths.TempDirectory, "ai-translate", Guid.NewGuid().ToString("N"));
         try
         {
+            // A "finished" entry from the search carries no source; it can only be served from the cache.
+            string source = job.SourceRef ?? throw new InvalidOperationException("These subtitles are no longer in the cache; search again.");
             string path;
             switch (job.SourceKind)
             {
                 case SourceKind.File:
-                    path = job.SourceRef!;
+                    path = source;
                     break;
                 case SourceKind.Embedded:
-                    path = await SubtitleSources.ExtractEmbeddedAsync(job.MediaPath, int.Parse(job.SourceRef!, CultureInfo.InvariantCulture), _mediaEncoder.EncoderPath, work, CancellationToken.None).ConfigureAwait(false);
+                    path = await SubtitleSources.ExtractEmbeddedAsync(job.MediaPath, int.Parse(source, CultureInfo.InvariantCulture), _mediaEncoder.EncoderPath, work, cancellationToken).ConfigureAwait(false);
                     break;
                 case SourceKind.Remote:
                     var manager = _services.GetRequiredService<ISubtitleManager>();
-                    var response = await manager.GetRemoteSubtitles(job.SourceRef!, CancellationToken.None).ConfigureAwait(false);
+                    var response = await manager.GetRemoteSubtitles(source, cancellationToken).ConfigureAwait(false);
                     Directory.CreateDirectory(work);
                     path = Path.Combine(work, "remote." + (string.IsNullOrEmpty(response.Format) ? "srt" : response.Format.ToLowerInvariant()));
+                    await using (var remote = response.Stream)
                     await using (var file = File.Create(path))
                     {
-                        await response.Stream.CopyToAsync(file).ConfigureAwait(false);
+                        await remote.CopyToAsync(file, cancellationToken).ConfigureAwait(false);
                     }
 
                     break;
@@ -303,20 +344,11 @@ public sealed class SubtitleJobService
                     throw new InvalidOperationException("Unknown subtitle source " + job.SourceKind);
             }
 
-            return await SubtitleSources.ReadAsync(path, _mediaEncoder.EncoderPath, work, config.StripHearingImpaired, CancellationToken.None).ConfigureAwait(false);
+            return await SubtitleSources.ReadAsync(path, _mediaEncoder.EncoderPath, work, config.StripHearingImpaired, job.SourceLanguage, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
-            try
-            {
-                if (Directory.Exists(work))
-                {
-                    Directory.Delete(work, recursive: true);
-                }
-            }
-            catch (IOException)
-            {
-            }
+            TryDeleteDirectory(work);
         }
     }
 
@@ -325,34 +357,33 @@ public sealed class SubtitleJobService
         ITranscriber transcriber,
         AudioExtractor extractor,
         PluginConfiguration config,
-        Action<string> stage)
+        Action<string> stage,
+        CancellationToken cancellationToken)
     {
         string path = TranscriptPath(job.MediaPath, transcriber.Id);
         if (File.Exists(path))
         {
-            var cached = JsonSerializer.Deserialize<CachedTranscript>(await File.ReadAllTextAsync(path).ConfigureAwait(false))!;
+            var cached = JsonSerializer.Deserialize<CachedTranscript>(await File.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false))!;
             return (CueTools.Repair(CueTools.ParseSrt(cached.Srt)), cached.Language);
         }
 
         var work = Path.Combine(_appPaths.TempDirectory, "ai-translate", Guid.NewGuid().ToString("N"));
+        var usage = new List<Usage>();
         try
         {
             stage("извличане на аудио");
-            int audioIndex = await extractor.GetDefaultAudioIndexAsync(job.MediaPath, CancellationToken.None).ConfigureAwait(false);
-            var chunks = await extractor.ExtractAsync(job.MediaPath, audioIndex, transcriber.ChunkLength(config), work, CancellationToken.None).ConfigureAwait(false);
+            var chunkLength = transcriber.ChunkLength(config);
+            int audioIndex = await extractor.GetDefaultAudioIndexAsync(job.MediaPath, cancellationToken).ConfigureAwait(false);
+            var chunks = await extractor.ExtractAsync(job.MediaPath, audioIndex, chunkLength, work, cancellationToken).ConfigureAwait(false);
 
-            var parts = new Transcription[chunks.Count];
+            // The same file, track, model and chunk length give the same chunks, so recognised ones can be reused.
+            string chunkCache = Path.Combine(
+                MediaFolder(job.MediaPath),
+                "chunks",
+                Hash(string.Create(CultureInfo.InvariantCulture, $"{transcriber.Id}|{TranscribeModel(transcriber, config)}|{(int)chunkLength.TotalSeconds}|{audioIndex}|{MediaStamp(job.MediaPath)}")));
             int done = 0;
             stage($"разпознаване на говор 0/{chunks.Count}");
-            await Parallel.ForEachAsync(
-                Enumerable.Range(0, chunks.Count),
-                new ParallelOptions { MaxDegreeOfParallelism = transcriber.Parallelism },
-                async (i, ct) =>
-                {
-                    parts[i] = await transcriber.TranscribeAsync(chunks[i], config, ct).ConfigureAwait(false);
-                    stage($"разпознаване на говор {Interlocked.Increment(ref done)}/{chunks.Count}");
-                }).ConfigureAwait(false);
-            Record(job, "transcribe", parts.Select(p => p.Usage));
+            var parts = await TranscribeChunksAsync(transcriber, chunks, config, chunkCache, usage, () => stage($"разпознаване на говор {Interlocked.Increment(ref done)}/{chunks.Count}"), cancellationToken).ConfigureAwait(false);
 
             var cues = parts
                 .SelectMany((p, i) => p.Cues.Select(c => c with { Start = c.Start + chunks[i].Offset, End = c.End + chunks[i].Offset }))
@@ -360,32 +391,95 @@ public sealed class SubtitleJobService
             string? language = parts.Select(p => p.Language).FirstOrDefault(l => l is not null);
 
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            await File.WriteAllTextAsync(path, JsonSerializer.Serialize(new CachedTranscript(language, CueTools.ToSrt(cues), job.MediaPath))).ConfigureAwait(false);
+            // Paid for: saved even if the job is being stopped.
+            await File.WriteAllTextAsync(path, JsonSerializer.Serialize(new CachedTranscript(language, CueTools.ToSrt(cues), job.MediaPath)), CancellationToken.None).ConfigureAwait(false);
+            TryDeleteDirectory(chunkCache);
             return (cues, language);
         }
         finally
         {
-            try
-            {
-                Directory.Delete(work, recursive: true);
-            }
-            catch (IOException)
-            {
-            }
+            // Chunks that were paid for count against the budget even when another chunk failed.
+            Record(job, "transcribe", usage);
+            TryDeleteDirectory(work);
         }
     }
 
-    private void CheckBudget(PluginConfiguration config, double estimate, string title)
+    /// <summary>
+    /// Recognises the chunks (<see cref="ITranscriber.Parallelism"/> at a time). Each finished chunk is saved in
+    /// <paramref name="cacheDir"/> at once, so a run that stops half way (rate limit, server error, restart, Stop)
+    /// continues from there and does not pay for those chunks again. Paid requests are added to <paramref name="usage"/>.
+    /// </summary>
+    internal static async Task<Transcription[]> TranscribeChunksAsync(
+        ITranscriber transcriber,
+        IReadOnlyList<AudioChunk> chunks,
+        PluginConfiguration config,
+        string cacheDir,
+        ICollection<Usage> usage,
+        Action progress,
+        CancellationToken cancellationToken = default)
     {
-        if (config.MonthlyBudgetUsd <= 0)
+        var parts = new Transcription[chunks.Count];
+        await Parallel.ForEachAsync(
+            Enumerable.Range(0, chunks.Count),
+            new ParallelOptions { MaxDegreeOfParallelism = transcriber.Parallelism, CancellationToken = cancellationToken },
+            async (i, ct) =>
+            {
+                string cache = Path.Combine(cacheDir, i.ToString("000", CultureInfo.InvariantCulture) + ".json");
+                var part = await ReadChunkAsync(cache, ct).ConfigureAwait(false);
+                if (part is null)
+                {
+                    part = await transcriber.TranscribeAsync(chunks[i], config, ct).ConfigureAwait(false);
+                    lock (usage)
+                    {
+                        usage.Add(part.Usage);
+                    }
+
+                    // Paid for: saved even if the job is being stopped.
+                    Directory.CreateDirectory(cacheDir);
+                    await File.WriteAllTextAsync(cache, JsonSerializer.Serialize(part), CancellationToken.None).ConfigureAwait(false);
+                }
+
+                parts[i] = part;
+                progress();
+            }).ConfigureAwait(false);
+        return parts;
+    }
+
+    private static async Task<Transcription?> ReadChunkAsync(string path, CancellationToken cancellationToken)
+    {
+        if (!File.Exists(path))
         {
-            return;
+            return null;
         }
 
-        double spent = Ledger.MonthTotal(DateTime.UtcNow);
-        if (spent + estimate > config.MonthlyBudgetUsd)
+        try
         {
-            throw new BudgetExceededException($"Месечният лимит ${config.MonthlyBudgetUsd:0.00} би бил надхвърлен: похарчени ${spent:0.00} + ≈${estimate:0.00} за „{title}“.");
+            return JsonSerializer.Deserialize<Transcription>(await File.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false));
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    // Size and modification time: a replaced file at the same path must not reuse old chunks.
+    private static string MediaStamp(string mediaPath)
+    {
+        var info = new FileInfo(mediaPath);
+        return info.Exists ? string.Create(CultureInfo.InvariantCulture, $"{info.Length}|{info.LastWriteTimeUtc.Ticks}") : string.Empty;
+    }
+
+    private static void TryDeleteDirectory(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path))
+            {
+                Directory.Delete(path, recursive: true);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
         }
     }
 

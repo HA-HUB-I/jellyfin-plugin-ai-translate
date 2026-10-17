@@ -1,9 +1,16 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net.Http;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Threading;
+using System.Threading.Tasks;
 using Jellyfin.Plugin.AiTranslate.Billing;
 using Jellyfin.Plugin.AiTranslate.Providers;
 using Jellyfin.Plugin.AiTranslate.Subtitles;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace Jellyfin.Plugin.AiTranslate.Tests;
@@ -70,6 +77,46 @@ public class CueTests
         Assert.Contains("01:30:00,000 --> 01:30:02,000", srt, StringComparison.Ordinal);
         Assert.Equal(cues, CueTools.ParseSrt(srt));
     }
+
+    [Theory]
+    [InlineData("1\n00:00:01,000 --> 00:00:02,000 X1:100 X2:200 Y1:10 Y2:20\nPosition after the time\n")]
+    [InlineData("1 \r\n00:00:01,000 --> 00:00:02,000\r\nCounter with a space\r\n")]
+    [InlineData("1\n0:00:01,000 --> 0:00:02,000\nOne-digit hours\n")]
+    [InlineData("00:00:01,000 --> 00:00:02,000\nNo counter\n")]
+    [InlineData("1\n00:00:01.000 --> 00:00:02.000\nDots\n")]
+    [InlineData("1\n00:00:01,0 --> 00:00:02,00\nShort milliseconds\n")]
+    public void ParsesSrtAsFoundInTheWild(string srt)
+    {
+        // Measured before: each of these lost the cue.
+        var cue = Assert.Single(CueTools.ParseSrt(srt));
+        Assert.Equal(TimeSpan.FromSeconds(1), cue.Start);
+        Assert.Equal(TimeSpan.FromSeconds(2), cue.End);
+        Assert.DoesNotContain("-->", cue.Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SeparatesCuesWithoutAProperBlankLine()
+    {
+        // Measured before: both were read as one cue with the second timing line inside its text.
+        Assert.Equal(["First", "Second\nline"], CueTools.ParseSrt("1\n00:00:01,000 --> 00:00:02,000\nFirst\n2\n00:00:03,000 --> 00:00:04,500\nSecond\nline\n").Select(c => c.Text));
+        var cues = CueTools.ParseSrt("1\n00:00:01,000 --> 00:00:02,000\nFirst\n \t\n2\n00:00:03,000 --> 00:00:04,000\nSecond\n");
+        Assert.Equal(["First", "Second"], cues.Select(c => c.Text));
+        Assert.Equal(TimeSpan.FromSeconds(3), cues[1].Start);
+        Assert.Equal(TimeSpan.FromMilliseconds(1500), CueTools.ParseSrt("1\n00:00:01,5 --> 00:00:02,000\nx\n")[0].Start);
+    }
+
+    [Fact]
+    public void NeverWritesNegativeTimes()
+    {
+        // A displaced first cue was spread back before 00:00:00 ("00:00:00,-933 --> 00:00:00,350").
+        TimedWord W(double s, double e, string t) => new(TimeSpan.FromSeconds(s), TimeSpan.FromSeconds(e), t);
+        var repaired = CueTools.Repair([C(30, 31, "Hello there, friend."), C(0.4, 1.2, "A b c."), C(1.3, 2, "D e f."), C(2.1, 3, "G h i.")]);
+        Assert.All(repaired, c => Assert.True(c.Start >= TimeSpan.Zero, c.Start.ToString()));
+        Assert.All(CueTools.SanitizeWords([W(9, 9.5, "Late"), W(0.1, 0.3, "a"), W(0.3, 0.5, "b"), W(0.5, 0.7, "c")]), w => Assert.True(w.Start >= TimeSpan.Zero));
+        Assert.StartsWith("1\n00:00:00,000 --> 00:00:01,000", CueTools.ToSrt([new Cue(TimeSpan.FromSeconds(-1), TimeSpan.FromSeconds(1), "x")]), StringComparison.Ordinal);
+    }
+
+    private static Cue C(double s, double e, string t) => new(TimeSpan.FromSeconds(s), TimeSpan.FromSeconds(e), t);
 }
 
 public class ProviderParsingTests
@@ -167,6 +214,100 @@ public class TranslationTests
         Assert.Contains("Здравей", json, StringComparison.Ordinal);
         Assert.Contains("\"i\":0", json, StringComparison.Ordinal);
     }
+
+    [Theory]
+    [InlineData("OpenAI 429: {\"error\":{\"type\":\"insufficient_quota\",\"code\":\"credit_balance_exhausted\"}}")]
+    [InlineData("OpenAI 401: {\"error\":{\"message\":\"Incorrect API key provided\"}}")]
+    [InlineData("Gemini 400: {\"error\":{\"message\":\"API key not valid\"}}")]
+    public async Task ProviderErrorStopsAtOnceInsteadOfReturningTheOriginal(string error)
+    {
+        // Measured before: no exception, 3 attempts, and the English lines came back as the "translation" (and were cached).
+        var fake = new FakeTranslator((_, _) => throw new HttpRequestException(error));
+        var usage = new List<Usage>();
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => Translate(fake, Lines(120), null, usage));
+        Assert.Equal(error, ex.Message);
+        Assert.InRange(fake.Calls, 1, 3);   // at most one try per batch (3 run at the same time), no retries
+    }
+
+    [Fact]
+    public async Task FailedRequestsStopTheJobAndTheNextRunOnlyPaysForTheRest()
+    {
+        var cache = Directory.CreateTempSubdirectory("ai-batches-").FullName;
+        try
+        {
+            // Batch 2 of 3 (lines 50–99) keeps failing with a server error.
+            var failing = new FakeTranslator((_, user) => user.Contains("\"line 50\"", StringComparison.Ordinal) ? throw new HttpRequestException("Gemini 503: overloaded") : FakeTranslator.Answer(user));
+            var usage = new List<Usage>();
+            await Assert.ThrowsAsync<InvalidOperationException>(() => Translate(failing, Lines(120), cache, usage));
+            Assert.Equal(2, usage.Count);                                   // the two good batches were paid and are recorded
+            Assert.Equal(2, Directory.GetFiles(cache).Length);              // … and kept
+
+            var working = new FakeTranslator((_, user) => FakeTranslator.Answer(user));
+            var cues = await Translate(working, Lines(120), cache, new List<Usage>());
+            Assert.Equal(1, working.Calls);                                 // only the failed batch is sent again
+            Assert.All(cues, c => Assert.StartsWith("BG:", c.Text, StringComparison.Ordinal));
+            Assert.Empty(Directory.GetFiles(cache));                        // done: nothing left to resume
+        }
+        finally
+        {
+            Directory.Delete(cache, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task UnusableAnswersKeepTheOriginalLinesOnlyWhenTheyAreFew()
+    {
+        // 600 lines = 12 batches; one batch always answers without lines (e.g. blocked content).
+        string Answer(string user, params string[] badFirstLines) =>
+            badFirstLines.Any(b => user.Contains($"\"{b}\"", StringComparison.Ordinal)) ? "{\"lines\":[]}" : FakeTranslator.Answer(user);
+
+        var oneBad = await Translate(new FakeTranslator((_, u) => Answer(u, "line 100")), Lines(600), null, new List<Usage>());
+        Assert.Equal("line 120", oneBad[120].Text);                       // kept in the original
+        Assert.Equal("BG:line 0", oneBad[0].Text);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Translate(new FakeTranslator((_, u) => Answer(u, "line 100", "line 300")), Lines(600), null, new List<Usage>()));
+    }
+
+    private static List<Cue> Lines(int n) => Enumerable.Range(0, n).Select(i => new Cue(TimeSpan.FromSeconds(i * 3), TimeSpan.FromSeconds((i * 3) + 2), $"line {i}")).ToList();
+
+    private static Task<List<Cue>> Translate(ITranslator translator, List<Cue> source, string? cache, List<Usage> usage) =>
+        new Translation(NullLogger.Instance) { RetryPause = TimeSpan.Zero }
+            .TranslateAsync(translator, source, "en", "bg", "Film (2026)", new Configuration.PluginConfiguration(), cache, "fake|model|low", usage, CancellationToken.None);
+}
+
+/// <summary>A translator whose answers the test decides: (call number, request JSON) → answer JSON, or an exception.</summary>
+internal sealed class FakeTranslator : ITranslator
+{
+    private readonly Func<int, string, string> _answer;
+    private int _calls;
+
+    public FakeTranslator(Func<int, string, string> answer) => _answer = answer;
+
+    public int Calls => _calls;
+
+    public string Id => "gemini";
+
+    public string DisplayName(Configuration.PluginConfiguration config) => "Fake";
+
+    public bool IsAvailable(Configuration.PluginConfiguration config) => true;
+
+    public (double Input, double Output) PricePerMTok(Configuration.PluginConfiguration config) => (1, 1);
+
+    public Task<(string Json, Usage Usage)> CompleteJsonAsync(string systemPrompt, string userJson, Configuration.PluginConfiguration config, CancellationToken cancellationToken)
+    {
+        string json = _answer(Interlocked.Increment(ref _calls), userJson);
+        return Task.FromResult((json, new Usage("gemini", "fake", 0, 100, 100, 0.001)));
+    }
+
+    /// <summary>Every line of the request as "BG:&lt;line&gt;".</summary>
+    public static string Answer(string userJson)
+    {
+        using var doc = JsonDocument.Parse(userJson);
+        var lines = doc.RootElement.GetProperty("lines").EnumerateArray()
+            .Select(l => (JsonNode)new JsonObject { ["i"] = l.GetProperty("i").GetInt32(), ["t"] = "BG:" + l.GetProperty("t").GetString() })
+            .ToArray();
+        return new JsonObject { ["lines"] = new JsonArray(lines) }.ToJsonString();
+    }
 }
 
 public class RateLimitTests
@@ -186,6 +327,27 @@ public class RateLimitTests
     {
         Assert.Equal(TimeSpan.FromSeconds(40), RateLimit.RetryDelay("Gemini 503: overloaded", 2));
         Assert.False(RateLimit.IsRetryable("Gemini 400: bad request"));
+    }
+
+    [Theory]
+    [InlineData("Gemini 500: {\"error\":{\"status\":\"INTERNAL\"}}", true)]
+    [InlineData("Gemini 502: Bad Gateway", true)]
+    [InlineData("Gemini 504: {\"error\":{\"status\":\"DEADLINE_EXCEEDED\"}}", true)]
+    [InlineData("OpenAI 500: server_error", true)]
+    [InlineData("OpenAI 401: invalid_api_key", false)]
+    [InlineData("Gemini 404: model not found", false)]
+    public void ServerErrorsAreRetried(string message, bool retryable)
+    {
+        // A single 500 used to end a 20-minute transcription or a film's voice-over.
+        Assert.Equal(retryable, RateLimit.IsRetryable(new HttpRequestException(message)));
+    }
+
+    [Fact]
+    public void DroppedConnectionsAreRetried()
+    {
+        Assert.True(RateLimit.IsRetryable(new HttpRequestException(HttpRequestError.ConnectionError, "Connection reset by peer")));
+        Assert.True(RateLimit.IsRetryable(new HttpRequestException(HttpRequestError.ResponseEnded, "The response ended prematurely")));
+        Assert.False(RateLimit.IsRetryable(new HttpRequestException("OpenAI 400: bad request")));
     }
 
     [Fact]
@@ -225,6 +387,136 @@ public class MiscTests
         Assert.DoesNotContain('/', id);
         Assert.DoesNotContain('+', id);
         Assert.Equal(job, AiSubtitleProvider.Decode(id));
+
+        var brazil = new SubtitleJob("/m/f.mkv", "F", "pt-br", "-", "openai", SourceKind.Embedded, "3", "en");
+        Assert.Equal(brazil, AiSubtitleProvider.Decode(AiSubtitleProvider.Encode(brazil)));
+    }
+
+    [Fact]
+    public void SubtitleIdsThatCouldLeaveTheCacheAreRejected()
+    {
+        // The id comes back from the client and its fields end up in cache file names.
+        SubtitleJob[] evil =
+        [
+            new("/m/f.mkv", "F", "../../../../tmp/x", "openai", "gemini"),
+            new("/m/f.mkv", "F", "bg", "-", "gemini", SourceKind.File, "/m/f.en.srt", "en/../../../x"),
+            new("/m/f.mkv", "F", "bg", "openai", "../../x"),
+            new("/m/f.mkv", "F", "bg", "../x", "gemini"),
+            new("/m/f.mkv", "F", "bg", "-", "gemini", "elsewhere", "/etc/passwd", "en"),
+            new("/m/f.mkv", "F", "bg", "-", "gemini", SourceKind.Embedded, "0:s:0", "en"),
+            new(string.Empty, "F", "bg", "openai", "gemini"),
+        ];
+        Assert.All(evil, job => Assert.Throws<ArgumentException>(() => AiSubtitleProvider.Decode(AiSubtitleProvider.Encode(job))));
+    }
+
+    [Fact]
+    public async Task SingleFlightStartsOneJobPerKey()
+    {
+        var flights = new SingleFlight<string, int>(StringComparer.Ordinal);
+        int starts = 0;
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        // 50 requests at the same moment from several threads (a double click, two clients): one paid job.
+        var all = new Task<int>[50];
+        Parallel.For(0, all.Length, i => all[i] = flights.Run(
+            "film|bg",
+            async _ =>
+            {
+                Interlocked.Increment(ref starts);
+                await gate.Task;
+                return 7;
+            },
+            out _));
+        Assert.True(flights.IsRunning("film|bg"));
+        gate.SetResult();
+        Assert.All(await Task.WhenAll(all), r => Assert.Equal(7, r));
+        Assert.Equal(1, starts);
+        Assert.False(flights.IsRunning("film|bg"));
+
+        // A failure is not remembered: the next request starts again.
+        var failed = flights.Run("film|bg", _ => Task.FromException<int>(new InvalidOperationException("quota")), out bool first);
+        Assert.True(first);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => failed);
+        Assert.Equal(8, await flights.Run("film|bg", _ => Task.FromResult(8), out bool again));
+        Assert.True(again);
+    }
+
+    [Fact]
+    public async Task SingleFlightStopsAJobOnRequestOnly()
+    {
+        var flights = new SingleFlight<string, int>(StringComparer.Ordinal);
+        var running = flights.Run("dub", async ct => { await Task.Delay(Timeout.Infinite, ct); return 1; }, out _);
+        Assert.False(flights.Cancel("other"));
+        Assert.True(flights.Cancel("dub"));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => running);
+        Assert.True(running.IsCanceled);
+        Assert.False(flights.IsRunning("dub"));
+        Assert.False(flights.Cancel("dub"));
+
+        // A job's own timeout (not a Stop) is a failure, not a stop.
+        var timedOut = flights.Run("tts", async _ => { using var t = new CancellationTokenSource(10); await Task.Delay(Timeout.Infinite, t.Token); return 1; }, out _);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => timedOut);
+        Assert.True(timedOut.IsFaulted);
+    }
+
+    [Fact]
+    public void BudgetHoldsTheEstimatesOfRunningJobs()
+    {
+        var dir = Directory.CreateTempSubdirectory("ai-budget-").FullName;
+        try
+        {
+            var ledger = new Ledger(dir);
+            var now = new DateTime(2026, 10, 17, 12, 0, 0, DateTimeKind.Utc);
+            ledger.Add(new UsageEntry(now, "A", "translate", "gemini", "m", 0, 0, 0, 6.0));
+
+            // $6 spent of $10: a $3 job fits, a second $3 job started at the same time does not.
+            using (ledger.Reserve(3.0, 10, "Film 1", now))
+            {
+                Assert.Equal(3.0, ledger.Reserved);
+                var ex = Assert.Throws<BudgetExceededException>(() => ledger.Reserve(3.0, 10, "Film 2", now));
+                Assert.Contains("„Film 2“", ex.Message, StringComparison.Ordinal);
+                ledger.Reserve(0.5, 0, "No limit", now).Dispose();
+            }
+
+            Assert.Equal(0, ledger.Reserved);
+            ledger.Reserve(3.0, 10, "Film 2", now).Dispose();
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void CostLogMovesOutOfTheOldFallbackFolder()
+    {
+        // Services created before the plugin wrote the cost log to {data}/ai-translate: its spending must not vanish.
+        var root = Directory.CreateTempSubdirectory("ai-data-").FullName;
+        try
+        {
+            string legacy = Path.Combine(root, "data", "ai-translate");
+            string folder = Path.Combine(root, "plugins", "Jellyfin.Plugin.AiTranslate");
+            Directory.CreateDirectory(legacy);
+            var now = new DateTime(2026, 10, 16, 12, 0, 0, DateTimeKind.Utc);
+            new Ledger(legacy).Add(new UsageEntry(now, "Old", "tts", "openai", "m", 1, 0, 0, 0.46));
+            new Ledger(folder).Add(new UsageEntry(now.AddDays(1), "New", "translate", "gemini", "m", 0, 1, 1, 0.07));
+            File.WriteAllText(Path.Combine(legacy, "quota.json"), "{\"Day\":\"2026-10-16\",\"Counts\":{}}");
+
+            PluginData.MergeLegacy(legacy, folder);
+
+            Assert.Equal(["Old", "New"], new Ledger(folder).ReadAll().Select(e => e.Item));
+            Assert.Equal(0.53, new Ledger(folder).MonthTotal(now), 6);
+            Assert.True(File.Exists(Path.Combine(folder, "quota.json")));
+            Assert.True(File.Exists(Path.Combine(legacy, "ledger.jsonl.moved")));
+            Assert.False(File.Exists(Path.Combine(legacy, "ledger.jsonl")));
+
+            PluginData.MergeLegacy(legacy, folder);                 // nothing left to move: no double counting
+            Assert.Equal(2, new Ledger(folder).ReadAll().Count);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     [Fact]

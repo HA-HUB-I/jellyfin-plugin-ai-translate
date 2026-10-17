@@ -105,7 +105,7 @@ public static partial class CueTools
 
             var run = Enumerable.Range(i, runEnd - i + 1).ToList();
             var naturalTotal = TimeSpan.FromTicks(run.Sum(k => natural(items[k].Length).Ticks));
-            var windowStart = i > 0 ? result[i - 1].End : (runEnd + 1 < n ? result[runEnd + 1].Start - naturalTotal : items[i].Start);
+            var windowStart = i > 0 ? result[i - 1].End : (runEnd + 1 < n ? Max(TimeSpan.Zero, result[runEnd + 1].Start - naturalTotal) : items[i].Start);
             var windowEnd = runEnd + 1 < n ? result[runEnd + 1].Start : windowStart + naturalTotal;
             var minimum = TimeSpan.FromMilliseconds(300 * run.Count);
             if (windowEnd - windowStart < minimum)
@@ -325,12 +325,39 @@ public static partial class CueTools
         return sb.ToString();
     }
 
+    /// <summary>
+    /// Reads SRT as it is found in the wild: the counter may be missing or followed by spaces, cues may follow each other
+    /// without a blank line (or with one holding only spaces), hours may have one digit, milliseconds may be written
+    /// with a dot or fewer digits, and a position after the end time ("X1:… Y2:…") is ignored.
+    /// </summary>
     public static List<Cue> ParseSrt(string srt)
     {
         var cues = new List<Cue>();
-        foreach (Match m in SrtBlockRegex().Matches(srt.Replace("\r\n", "\n", StringComparison.Ordinal)))
+        var lines = srt.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Split('\n');
+        for (int i = 0; i < lines.Length; i++)
         {
-            cues.Add(new Cue(ParseTime(m.Groups[1].Value), ParseTime(m.Groups[2].Value), m.Groups[3].Value.Trim()));
+            var m = SrtTimingRegex().Match(lines[i]);
+            if (!m.Success)
+            {
+                continue;
+            }
+
+            var text = new List<string>();
+            int next = i + 1;
+            while (next < lines.Length && !string.IsNullOrWhiteSpace(lines[next]) && !SrtTimingRegex().IsMatch(lines[next]))
+            {
+                text.Add(lines[next].Trim());
+                next++;
+            }
+
+            // A cue that runs straight into the next one: its last line is the next cue's counter.
+            if (next < lines.Length && text.Count > 0 && SrtTimingRegex().IsMatch(lines[next]) && CounterRegex().IsMatch(text[^1]))
+            {
+                text.RemoveAt(text.Count - 1);
+            }
+
+            cues.Add(new Cue(Time(m, 1), Time(m, 5), string.Join('\n', text)));
+            i = next - 1;
         }
 
         return cues;
@@ -399,11 +426,20 @@ public static partial class CueTools
 
     private static string Normalize(string text) => WhitespaceRegex().Replace(text, " ").Trim();
 
-    private static string SrtTime(TimeSpan t) =>
-        string.Create(CultureInfo.InvariantCulture, $"{(int)t.TotalHours:00}:{t.Minutes:00}:{t.Seconds:00},{t.Milliseconds:000}");
+    private static string SrtTime(TimeSpan t)
+    {
+        t = Max(t, TimeSpan.Zero);
+        return string.Create(CultureInfo.InvariantCulture, $"{(int)t.TotalHours:00}:{t.Minutes:00}:{t.Seconds:00},{t.Milliseconds:000}");
+    }
 
-    private static TimeSpan ParseTime(string s) =>
-        TimeSpan.ParseExact(s.Replace('.', ','), @"hh\:mm\:ss\,fff", CultureInfo.InvariantCulture);
+    // Groups first..first+3 of the timing regex: hours, minutes, seconds, fraction ("5" = 500 ms, "05" = 50 ms).
+    private static TimeSpan Time(Match m, int first)
+    {
+        int Part(int g) => int.Parse(m.Groups[g].Value, CultureInfo.InvariantCulture);
+        var fraction = m.Groups[first + 3];
+        int ms = fraction.Success ? int.Parse(fraction.Value.PadRight(3, '0'), CultureInfo.InvariantCulture) : 0;
+        return new TimeSpan(0, Part(first), Part(first + 1), Part(first + 2), ms);
+    }
 
     [GeneratedRegex(@"\s+")]
     private static partial Regex WhitespaceRegex();
@@ -415,6 +451,9 @@ public static partial class CueTools
     [GeneratedRegex(@"^(.+?[.!?…♪""])\s+-\s+(.+)$")]
     private static partial Regex InlineDialogueRegex();
 
-    [GeneratedRegex(@"\d+\n(\d\d:\d\d:\d\d[,.]\d\d\d) --> (\d\d:\d\d:\d\d[,.]\d\d\d)\n(.*?)(?:\n\n|\n*$)", RegexOptions.Singleline)]
-    private static partial Regex SrtBlockRegex();
+    [GeneratedRegex(@"^\s*(\d{1,3}):(\d{1,2}):(\d{1,2})(?:[,.:](\d{1,3}))?\s*-->\s*(\d{1,3}):(\d{1,2}):(\d{1,2})(?:[,.:](\d{1,3}))?")]
+    private static partial Regex SrtTimingRegex();
+
+    [GeneratedRegex(@"^\d+$")]
+    private static partial Regex CounterRegex();
 }

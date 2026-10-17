@@ -6,6 +6,9 @@ namespace Jellyfin.Plugin.AiTranslate.Providers;
 
 public static class Languages
 {
+    // Enumerating the cultures is slow (it builds them all); it is done once.
+    private static readonly CultureInfo[] Neutral = CultureInfo.GetCultures(CultureTypes.NeutralCultures);
+
     /// <summary>Maps whisper's language names ("english") to ISO 639-1 ("en").</summary>
     public static string? FromEnglishName(string? name)
     {
@@ -19,7 +22,7 @@ public static class Languages
             return name.ToLowerInvariant();
         }
 
-        return CultureInfo.GetCultures(CultureTypes.NeutralCultures)
+        return Neutral
             .FirstOrDefault(c => c.TwoLetterISOLanguageName.Length == 2 && string.Equals(c.EnglishName, name, StringComparison.OrdinalIgnoreCase))
             ?.TwoLetterISOLanguageName;
     }
@@ -27,7 +30,7 @@ public static class Languages
     /// <summary>English name of a language code ("bg" or "bul") for prompts, e.g. "Bulgarian".</summary>
     public static string EnglishName(string code)
     {
-        var culture = CultureInfo.GetCultures(CultureTypes.NeutralCultures)
+        var culture = Neutral
             .FirstOrDefault(c => string.Equals(c.TwoLetterISOLanguageName, code, StringComparison.OrdinalIgnoreCase)
                 || string.Equals(c.ThreeLetterISOLanguageName, code, StringComparison.OrdinalIgnoreCase));
         return culture?.EnglishName ?? code;
@@ -64,7 +67,7 @@ public static class Languages
             "baq" => "eus",
             var other => other,
         };
-        return CultureInfo.GetCultures(CultureTypes.NeutralCultures)
+        return Neutral
             .FirstOrDefault(c => c.ThreeLetterISOLanguageName == normalized)?.TwoLetterISOLanguageName ?? code.ToLowerInvariant();
     }
 }

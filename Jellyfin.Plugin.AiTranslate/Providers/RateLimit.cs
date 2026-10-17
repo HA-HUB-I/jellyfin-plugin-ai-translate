@@ -1,5 +1,6 @@
 using System;
 using System.Globalization;
+using System.Linq;
 using System.Net.Http;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -34,10 +35,15 @@ public sealed class Pacer
     }
 }
 
-/// <summary>Retries HTTP 429/503 answers, honouring "retry in Ns" / "Please try again in 1.5s" hints.</summary>
+/// <summary>
+/// Retries rate limits (429), server errors (500/502/503/504) and dropped connections, honouring
+/// "retry in Ns" / "Please try again in 1.5s" hints.
+/// </summary>
 public static partial class RateLimit
 {
     public const int MaxAttempts = 6;
+
+    private static readonly string[] RetryableStatuses = [" 429:", " 500:", " 502:", " 503:", " 504:"];
 
     public static async Task<T> RetryAsync<T>(Func<Task<T>> call, CancellationToken cancellationToken)
     {
@@ -47,17 +53,26 @@ public static partial class RateLimit
             {
                 return await call().ConfigureAwait(false);
             }
-            catch (HttpRequestException ex) when (attempt < MaxAttempts && IsRetryable(ex.Message))
+            catch (HttpRequestException ex) when (attempt < MaxAttempts && IsRetryable(ex))
             {
                 await Task.Delay(RetryDelay(ex.Message, attempt), cancellationToken).ConfigureAwait(false);
+            }
+            catch (HttpIOException) when (attempt < MaxAttempts)
+            {
+                // The answer was cut off while it was being read.
+                await Task.Delay(RetryDelay(string.Empty, attempt), cancellationToken).ConfigureAwait(false);
             }
         }
     }
 
+    /// <summary>Whether waiting and sending again can help: an answer above, or no answer at all (network error).</summary>
+    internal static bool IsRetryable(HttpRequestException ex) =>
+        ex.HttpRequestError != HttpRequestError.Unknown || IsRetryable(ex.Message);
+
     // A daily quota ("100 requests per day … retry in 14h") or an empty prepaid balance (OpenAI answers 429
     // "insufficient_quota") is not worth waiting for inside a job.
     internal static bool IsRetryable(string message) =>
-        (message.Contains(" 429:", StringComparison.Ordinal) || message.Contains(" 503:", StringComparison.Ordinal))
+        RetryableStatuses.Any(s => message.Contains(s, StringComparison.Ordinal))
         && !message.Contains("per day", StringComparison.OrdinalIgnoreCase)
         && !message.Contains("insufficient_quota", StringComparison.Ordinal)
         && !message.Contains("credit_balance", StringComparison.Ordinal);

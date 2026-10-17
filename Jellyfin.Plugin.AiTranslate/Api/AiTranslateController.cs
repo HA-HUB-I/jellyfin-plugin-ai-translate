@@ -17,12 +17,14 @@ public sealed class AiTranslateController : ControllerBase
     private readonly SubtitleJobService _jobs;
     private readonly DubService _dub;
     private readonly Providers.ModelCatalog _models;
+    private readonly CacheCleaner _cache;
 
-    public AiTranslateController(SubtitleJobService jobs, DubService dub, Providers.ModelCatalog models)
+    public AiTranslateController(SubtitleJobService jobs, DubService dub, Providers.ModelCatalog models, CacheCleaner cache)
     {
         _jobs = jobs;
         _dub = dub;
         _models = models;
+        _cache = cache;
     }
 
     /// <summary>Providers and whether their key works (it is checked by listing the account's models).</summary>
@@ -68,6 +70,7 @@ public sealed class AiTranslateController : ControllerBase
         {
             MonthTotalUsd = month.Sum(e => e.CostUsd),
             BudgetUsd = Plugin.Instance?.Configuration.MonthlyBudgetUsd ?? 0,
+            ReservedUsd = _jobs.Ledger.Reserved,
             ByProvider = month.GroupBy(e => e.Provider + " " + e.Model).Select(g => new { Name = g.Key, CostUsd = g.Sum(e => e.CostUsd), Minutes = g.Sum(e => e.AudioMinutes), InputTokens = g.Sum(e => e.InputTokens), OutputTokens = g.Sum(e => e.OutputTokens) }),
             Recent = entries.OrderByDescending(e => e.Utc).Take(50),
             Running = _jobs.Running.Concat(_dub.Running),
@@ -76,7 +79,7 @@ public sealed class AiTranslateController : ControllerBase
 
     /// <summary>Films/episodes matching the search that have subtitles in the language (voice-over candidates).</summary>
     [HttpGet("Dub/Candidates")]
-    public ActionResult<object> DubCandidates([FromQuery] string search, [FromQuery] string language = "bg")
+    public ActionResult<object> DubCandidates([FromQuery] string? search = null, [FromQuery] string language = "bg")
     {
         return Ok(_dub.Candidates(search ?? string.Empty, language).Select(v => new { v.Id, v.Name, v.ProductionYear, Exists = System.IO.File.Exists(DubService.OutputPath(v, language)) }));
     }
@@ -112,5 +115,27 @@ public sealed class AiTranslateController : ControllerBase
     {
         string? refused = _dub.Start(itemId, language, provider, voice);
         return refused is null ? Accepted() : Conflict(refused);
+    }
+
+    /// <summary>Stops a running job (what is finished stays cached), or hides the note of one that ended with an error.</summary>
+    [HttpPost("Jobs/{id}/Cancel")]
+    public ActionResult CancelJob([FromRoute] string id) => _jobs.Cancel(id) || _dub.Cancel(id) ? Accepted() : NotFound();
+
+    /// <summary>Disk space per kind of cached data.</summary>
+    [HttpGet("Cache")]
+    public ActionResult<object> GetCache() => Ok(_cache.Usage());
+
+    /// <summary>Cleans by the rules (kind = "rules") or empties one kind (subtitles, voice, resume, temp).</summary>
+    [HttpPost("Cache/Clean")]
+    public ActionResult<CleanResult> CleanCache([FromQuery] string kind = "rules")
+    {
+        if (kind == "rules")
+        {
+            return Ok(_cache.CleanByRules(Plugin.Instance?.Configuration ?? new Configuration.PluginConfiguration()));
+        }
+
+        return kind is CacheCleaner.Subtitles or CacheCleaner.Voice or CacheCleaner.Resume or CacheCleaner.Temp
+            ? Ok(_cache.Clear(kind))
+            : BadRequest("Unknown cache kind");
     }
 }

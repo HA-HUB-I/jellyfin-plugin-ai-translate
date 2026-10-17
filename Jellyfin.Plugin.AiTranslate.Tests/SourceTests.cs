@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using Jellyfin.Plugin.AiTranslate.Subtitles;
@@ -73,6 +74,37 @@ public class SourceTests
     {
         Assert.Equal("Здравей", SubtitleSources.DecodeText([0xEF, 0xBB, 0xBF, .. Encoding.UTF8.GetBytes("Здравей")]));
         Assert.Equal("café", SubtitleSources.DecodeText([0x63, 0x61, 0x66, 0xE9]));
+    }
+
+    [Fact]
+    public void DecodesTheLegacyCodePageOfTheSubtitleLanguage()
+    {
+        Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+
+        // Old Bulgarian subtitles are Windows-1251; read as 1252 they became "Çäðàâåé, ìàéîðå." — and that was spoken in the voice-over.
+        var bulgarian = Encoding.GetEncoding(1251).GetBytes("Здравей, майоре.");
+        Assert.Equal("Здравей, майоре.", SubtitleSources.DecodeText(bulgarian, "bul"));
+        Assert.Equal("Здравей, майоре.", SubtitleSources.DecodeText(bulgarian, "bg"));
+        Assert.Equal("Zażółć gęślą jaźń", SubtitleSources.DecodeText(Encoding.GetEncoding(1250).GetBytes("Zażółć gęślą jaźń"), "pol"));
+        Assert.Equal("café", SubtitleSources.DecodeText([0x63, 0x61, 0x66, 0xE9], "eng"));
+
+        // UTF-16 big endian used to be read as little endian.
+        Assert.Equal("Hello", SubtitleSources.DecodeText([0xFE, 0xFF, .. Encoding.BigEndianUnicode.GetBytes("Hello")]));
+        Assert.Equal("Hello", SubtitleSources.DecodeText([0xFF, 0xFE, .. Encoding.Unicode.GetBytes("Hello")]));
+    }
+
+    [Fact]
+    public void HumanSubtitlesKeepTheirTimingsRecognisedSpeechIsRepaired()
+    {
+        // Measured before: the 11 s cue of a translated human subtitle was cut to 1.2 s.
+        var cues = new[]
+        {
+            new Cue(TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(21), "♪ Long song line ♪"),
+            new Cue(TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(35), "Normal line here."),
+        };
+
+        Assert.Equal(TimeSpan.FromSeconds(21), SubtitleJobService.FinalCues(cues, fromAudio: false)[0].End);
+        Assert.True(SubtitleJobService.FinalCues(cues, fromAudio: true)[0].End < TimeSpan.FromSeconds(12));
     }
 
     [Fact]
@@ -176,6 +208,123 @@ public class SourceTests
         finally
         {
             System.IO.Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void FinishedJobOnlyReplacesThePlaceholdersOfItsOwnFilm()
+    {
+        // A season folder: two episodes are being generated at the same time.
+        var dir = System.IO.Directory.CreateTempSubdirectory("ai-season-").FullName;
+        try
+        {
+            string F(string name) => System.IO.Path.Combine(dir, name);
+            System.IO.File.WriteAllText(F("Show S01E01.bg.srt"), AiSubtitleProvider.Placeholder("15–25 мин"));
+            System.IO.File.WriteAllText(F("Show S01E01.bg.0.srt"), "1\n00:00:00,000 --> 09:59:59,000\n" + AiSubtitleProvider.FailedMarker + " субтитрите не успяха.\nGemini 503\n");
+            System.IO.File.WriteAllText(F("Show S01E01.bul.srt"), AiSubtitleProvider.Placeholder("15–25 мин"));
+            System.IO.File.WriteAllText(F("Show S01E02.bg.srt"), AiSubtitleProvider.Placeholder("15–25 мин"));
+            System.IO.File.WriteAllText(F("Show S01E01 Extended.bg.srt"), AiSubtitleProvider.Placeholder("15–25 мин"));
+            System.IO.File.WriteAllText(F("Show S01E01.en.srt"), AiSubtitleProvider.Placeholder("15–25 мин"));
+
+            var candidates = AiSubtitleProvider.PlaceholderCandidates(F("Show S01E01.mkv"), "bg", [], [dir, dir]);
+            Assert.Equal(["Show S01E01.bg.0.srt", "Show S01E01.bg.srt", "Show S01E01.bul.srt"], candidates.Select(System.IO.Path.GetFileName).Order(StringComparer.Ordinal));
+
+            // The finished episode 1 (also over its earlier "failed" note); episode 2 keeps waiting for its own job.
+            Assert.Equal(3, AiSubtitleProvider.ReplacePlaceholders(candidates, "1\n00:00:01,000 --> 00:00:02,000\nЗдравей\n"));
+            Assert.True(AiSubtitleProvider.IsPlaceholder(F("Show S01E02.bg.srt")));
+            Assert.False(AiSubtitleProvider.IsPlaceholder(F("Show S01E01.bg.0.srt")));
+        }
+        finally
+        {
+            System.IO.Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void StoppedJobRemovesItsPlaceholdersButNotRealSubtitles()
+    {
+        var dir = System.IO.Directory.CreateTempSubdirectory("ai-stop-").FullName;
+        try
+        {
+            string F(string name) => System.IO.Path.Combine(dir, name);
+            System.IO.File.WriteAllText(F("Film.bg.srt"), AiSubtitleProvider.Placeholder("1–5 мин"));
+            System.IO.File.WriteAllText(F("Film.bg.0.srt"), "1\n00:00:00,000 --> 09:59:59,000\n" + AiSubtitleProvider.FailedMarker + " субтитрите не успяха.\nGemini 503\n");
+            System.IO.File.WriteAllText(F("Film.bg.1.srt"), "1\n00:00:01,000 --> 00:00:02,000\nЗдравей\n");
+
+            var candidates = AiSubtitleProvider.PlaceholderCandidates(F("Film.mkv"), "bg", [], [dir]);
+            Assert.Equal(2, AiSubtitleProvider.RemovePlaceholders(candidates));
+            Assert.Equal(["Film.bg.1.srt"], System.IO.Directory.GetFiles(dir).Select(System.IO.Path.GetFileName));
+        }
+        finally
+        {
+            System.IO.Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async System.Threading.Tasks.Task RecognisedChunksAreKeptWhenTheJobStops()
+    {
+        var cache = System.IO.Path.Combine(System.IO.Directory.CreateTempSubdirectory("ai-chunks-").FullName, "chunks");
+        try
+        {
+            var chunks = Enumerable.Range(0, 4).Select(i => new Media.AudioChunk($"chunk{i:000}.mp3", TimeSpan.FromMinutes(6 * i), TimeSpan.FromMinutes(6))).ToList();
+            var config = new Configuration.PluginConfiguration();
+
+            // Chunk 2 hits an error: 0 and 1 are paid for, recorded and kept.
+            var first = new FakeTranscriber(failAt: 2);
+            var usage = new List<Providers.Usage>();
+            await Assert.ThrowsAsync<System.Net.Http.HttpRequestException>(() => SubtitleJobService.TranscribeChunksAsync(first, chunks, config, cache, usage, () => { }));
+            Assert.Equal([0, 1, 2], first.Requested);
+            Assert.Equal(2, usage.Count);
+
+            // The next run only pays for chunks 2 and 3.
+            var second = new FakeTranscriber(failAt: -1);
+            var again = new List<Providers.Usage>();
+            var parts = await SubtitleJobService.TranscribeChunksAsync(second, chunks, config, cache, again, () => { });
+            Assert.Equal([2, 3], second.Requested);
+            Assert.Equal(2, again.Count);
+            Assert.Equal(["chunk000.mp3 says hi", "chunk001.mp3 says hi", "chunk002.mp3 says hi", "chunk003.mp3 says hi"], parts.Select(p => p.Cues[0].Text));
+            Assert.Equal(TimeSpan.FromSeconds(1.5), parts[0].Cues[0].Start);
+        }
+        finally
+        {
+            System.IO.Directory.Delete(System.IO.Path.GetDirectoryName(cache)!, recursive: true);
+        }
+    }
+
+    private sealed class FakeTranscriber : Providers.ITranscriber
+    {
+        private readonly int _failAt;
+
+        public FakeTranscriber(int failAt) => _failAt = failAt;
+
+        public List<int> Requested { get; } = [];
+
+        public string Id => "gemini";
+
+        public int Parallelism => 1;
+
+        public string DisplayName(Configuration.PluginConfiguration config) => "Fake";
+
+        public bool IsAvailable(Configuration.PluginConfiguration config) => true;
+
+        public TimeSpan ChunkLength(Configuration.PluginConfiguration config) => TimeSpan.FromMinutes(6);
+
+        public TimeSpan EstimatedTime(TimeSpan duration, Configuration.PluginConfiguration config) => duration;
+
+        public double PricePerMinute(Configuration.PluginConfiguration config) => 0.005;
+
+        public System.Threading.Tasks.Task<Providers.Transcription> TranscribeAsync(Media.AudioChunk chunk, Configuration.PluginConfiguration config, System.Threading.CancellationToken cancellationToken)
+        {
+            int index = int.Parse(chunk.Path.AsSpan(5, 3), System.Globalization.CultureInfo.InvariantCulture);
+            Requested.Add(index);
+            if (index == _failAt)
+            {
+                throw new System.Net.Http.HttpRequestException("Gemini 400: bad request");
+            }
+
+            var cue = new Cue(TimeSpan.FromSeconds(1.5), TimeSpan.FromSeconds(3), chunk.Path + " says hi");
+            return System.Threading.Tasks.Task.FromResult(new Providers.Transcription([cue], null, new Providers.Usage("gemini", "fake", 6, 0, 0, 0.03)));
         }
     }
 

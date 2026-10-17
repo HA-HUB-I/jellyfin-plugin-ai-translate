@@ -102,10 +102,19 @@ public sealed class GeminiProvider : ITranscriber, ITranslator, IDisposable
             }
 
             // Long audio may come back as a running interaction; poll until it completes.
-            for (int i = 0; i < 360 && Status(body) is "in_progress" or "queued" or "running"; i++)
+            for (int i = 0; i < 360 && IsUnfinished(Status(body)); i++)
             {
                 await Task.Delay(PollInterval, cancellationToken).ConfigureAwait(false);
-                body = await SendJsonAsync(HttpMethod.Get, "v1beta/" + InteractionId(body), null, config, cancellationToken).ConfigureAwait(false);
+                string interaction = "v1beta/" + InteractionId(body);
+                body = await RateLimit.RetryAsync(() => SendJsonAsync(HttpMethod.Get, interaction, null, config, cancellationToken), cancellationToken).ConfigureAwait(false);
+            }
+
+            // A running or failed interaction has no words (or only some): never pass it on as a silent chunk —
+            // the transcript is cached, so the gap would stay in every subtitle made from it.
+            string? status = Status(body);
+            if (IsUnfinished(status) || status is "failed" or "cancelled" or "canceled" or "incomplete" or "expired")
+            {
+                throw new HttpRequestException(string.Create(CultureInfo.InvariantCulture, $"Gemini transcription of {chunk.Offset:hh\\:mm\\:ss} ended as \"{status}\": {(body.Length > 300 ? body[..300] : body)}"));
             }
 
             var words = ParseWordInfo(body);
@@ -118,9 +127,9 @@ public sealed class GeminiProvider : ITranscriber, ITranslator, IDisposable
             {
                 await SendJsonAsync(HttpMethod.Delete, "v1beta/" + fileName, null, config, CancellationToken.None).ConfigureAwait(false);
             }
-            catch (HttpRequestException)
+            catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException)
             {
-                // Files expire on their own after 48 hours.
+                // Files expire on their own after 48 hours; a failed clean-up must not hide the result.
             }
         }
     }
@@ -232,6 +241,8 @@ public sealed class GeminiProvider : ITranscriber, ITranslator, IDisposable
 
     private static TimeSpan Offset(string? value) =>
         TimeSpan.FromSeconds(double.Parse((value ?? "0").TrimEnd('s'), NumberStyles.Float, CultureInfo.InvariantCulture));
+
+    private static bool IsUnfinished(string? status) => status is "in_progress" or "queued" or "running";
 
     private static string? Status(string body)
     {

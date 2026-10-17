@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -49,8 +50,10 @@ public sealed class ModelCatalog
             lists = provider == "openai" ? ClassifyOpenAi(await GetOpenAiAsync(key, cancellationToken).ConfigureAwait(false))
                 : ClassifyGemini(await GetGeminiAsync(key, cancellationToken).ConfigureAwait(false));
         }
-        catch (HttpRequestException ex)
+        catch (Exception ex) when (ex is HttpRequestException or JsonException or KeyNotFoundException
+            || (ex is OperationCanceledException && !cancellationToken.IsCancellationRequested))
         {
+            // Shown next to the key on the settings page (an unexpected answer or a timeout must not break the page).
             return new ModelLists([], [], [], ex.Message);
         }
 
@@ -105,7 +108,7 @@ public sealed class ModelCatalog
             var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {
-                throw new HttpRequestException("Gemini " + (int)response.StatusCode);
+                throw new HttpRequestException(ErrorText("Gemini", (int)response.StatusCode, body));
             }
 
             using var json = JsonDocument.Parse(body);
@@ -131,10 +134,32 @@ public sealed class ModelCatalog
         var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
-            throw new HttpRequestException("OpenAI " + (int)response.StatusCode);
+            throw new HttpRequestException(ErrorText("OpenAI", (int)response.StatusCode, body));
         }
 
         using var json = JsonDocument.Parse(body);
         return json.RootElement.GetProperty("data").EnumerateArray().Select(m => m.GetProperty("id").GetString() ?? string.Empty).ToList();
+    }
+
+    /// <summary>"Gemini 400: API key not valid…": the provider's own message tells a wrong key from a missing balance.</summary>
+    internal static string ErrorText(string provider, int status, string body)
+    {
+        string? message = null;
+        try
+        {
+            using var json = JsonDocument.Parse(body);
+            if (json.RootElement.ValueKind == JsonValueKind.Object && json.RootElement.TryGetProperty("error", out var error)
+                && error.ValueKind == JsonValueKind.Object && error.TryGetProperty("message", out var m))
+            {
+                message = m.GetString();
+            }
+        }
+        catch (JsonException)
+        {
+        }
+
+        message ??= body;
+        message = message.Trim();
+        return string.Create(CultureInfo.InvariantCulture, $"{provider} {status}{(message.Length > 0 ? ": " + (message.Length > 200 ? message[..200] : message) : string.Empty)}");
     }
 }

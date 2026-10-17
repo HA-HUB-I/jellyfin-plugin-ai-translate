@@ -54,7 +54,7 @@ public sealed class DubService
     private readonly IApplicationPaths _appPaths;
     private readonly SubtitleJobService _jobs;
     private readonly ILogger<DubService> _logger;
-    private readonly ConcurrentDictionary<Guid, Task> _running = new();
+    private readonly SingleFlight<Guid, bool> _flights = new();
     private readonly ConcurrentDictionary<Guid, JobStatus> _status = new();
 
     public DubService(
@@ -124,7 +124,19 @@ public sealed class DubService
 
     private static PluginConfiguration Config => Plugin.Instance?.Configuration ?? new PluginConfiguration();
 
-    private string DataFolder => Plugin.Instance?.DataFolderPath ?? Path.Combine(_appPaths.DataPath, "ai-translate");
+    private string DataFolder => PluginData.Folder(_appPaths);
+
+    /// <summary>Stops a running voice-over (what is spoken so far stays cached), or hides the note of one that ended.</summary>
+    public bool Cancel(string id)
+    {
+        var entry = _status.FirstOrDefault(s => s.Value.Id == id);
+        if (entry.Value is null)
+        {
+            return false;
+        }
+
+        return _flights.Cancel(entry.Key) || _status.TryRemove(entry.Key, out _);
+    }
 
     /// <summary>Movies and episodes matching <paramref name="search"/> that have a text subtitle in the target language.</summary>
     public IEnumerable<Video> Candidates(string search, string language)
@@ -185,9 +197,10 @@ public sealed class DubService
         var tts = GetProvider(providerId);
         voice = GetVoice(tts, voice);
         var video = GetVideo(itemId);
-        if (_running.ContainsKey(itemId))
+        const string AlreadyRunning = "Вече тече озвучаване на този филм.";
+        if (_flights.IsRunning(itemId))
         {
-            return "Вече тече озвучаване на този филм.";
+            return AlreadyRunning;
         }
 
         int perDay = tts.RequestsPerDay(config);
@@ -196,49 +209,56 @@ public sealed class DubService
             return $"Дневният лимит от {perDay} заявки за {tts.DisplayName(config)} е изчерпан. Нулира се в {QuotaTracker.NextResetUtc(DateTime.UtcNow).ToLocalTime():HH:mm}.";
         }
 
-        _status[itemId] = new JobStatus(video.Name, language, "voice-over", "стартиране", DateTime.UtcNow);
+        // Reserved before it starts: a double click cannot start (and pay for) a second run.
+        string id = "dub-" + itemId.ToString("N", CultureInfo.InvariantCulture);
+        _flights.Run(
+            itemId,
+            async cancellationToken =>
+            {
+                _status[itemId] = new JobStatus(video.Name, language, "voice-over", "стартиране", DateTime.UtcNow, id);
+                try
+                {
+                    await RunAsync(video, language, tts, voice, id, cancellationToken).ConfigureAwait(false);
+                    _status.TryRemove(itemId, out _);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    _logger.LogInformation("AI Translate: voice-over of {Title} stopped", video.Name);
+                    _status[itemId] = new JobStatus(video.Name, language, "voice-over", "спряно — готовото е запазено; „Озвучи“ продължава оттам", DateTime.UtcNow, id, Running: false);
+                }
+                catch (Exception ex)
+                {
+                    // Keep the error visible on the settings page; a new run may start right away.
+                    _logger.LogError(ex, "AI Translate: voice-over of {Title} failed", video.Name);
+                    _status[itemId] = new JobStatus(video.Name, language, "voice-over", "грешка: " + ex.Message, DateTime.UtcNow, id, Running: false);
+                }
 
-        _running[itemId] = Task.Run(async () =>
-        {
-            try
-            {
-                await RunAsync(video, language, tts, voice).ConfigureAwait(false);
-                _status.TryRemove(itemId, out _);
-            }
-            catch (Exception ex)
-            {
-                // Keep the error visible on the settings page; a new run may start right away.
-                _logger.LogError(ex, "AI Translate: voice-over of {Title} failed", video.Name);
-                _status[itemId] = new JobStatus(video.Name, language, "voice-over", "грешка: " + ex.Message, DateTime.UtcNow);
-            }
-            finally
-            {
-                _running.TryRemove(itemId, out _);
-            }
-        });
-        return null;
+                return true;
+            },
+            out bool started);
+        return started ? null : AlreadyRunning;
     }
 
     internal static string OutputPath(Video video, string language) =>
         Path.Combine(Path.GetDirectoryName(video.Path)!, Path.GetFileNameWithoutExtension(video.Path) + "." + language + ".mka");
 
-    private async Task RunAsync(Video video, string language, ITtsProvider tts, string voice)
+    private async Task RunAsync(Video video, string language, ITtsProvider tts, string voice, string id, CancellationToken cancellationToken)
     {
         var config = Config;
         var started = DateTime.UtcNow;
         bool byGender = config.DubSplitByGender;
         string femaleVoice = byGender ? GetFemaleVoice(tts, config.DubVoiceFemale) : voice;
         string label = byGender ? $"{tts.DisplayName(config)} · {voice} / {femaleVoice}" : $"{tts.DisplayName(config)} · {voice}";
-        void Stage(string s) => _status[video.Id] = new JobStatus(video.Name, language, label, s, started);
+        void Stage(string s) => _status[video.Id] = new JobStatus(video.Name, language, label, s, started, id);
         string VoiceFor(DubSegment s) => byGender && s.Kind == VoiceKind.Female ? femaleVoice : voice;
 
         var stream = FindSubtitle(video, language) ?? throw new InvalidOperationException("Няма текстови субтитри на " + language);
         Stage("четене на субтитрите");
-        var cues = await ReadSubtitleAsync(video, stream, CancellationToken.None).ConfigureAwait(false);
+        var cues = await ReadSubtitleAsync(video, stream, cancellationToken).ConfigureAwait(false);
         var extractor = new AudioExtractor(_mediaEncoder.EncoderPath, _mediaEncoder.ProbePath);
-        int audioIndex = await extractor.GetDefaultAudioIndexAsync(video.Path, CancellationToken.None).ConfigureAwait(false);
+        int audioIndex = await extractor.GetDefaultAudioIndexAsync(video.Path, cancellationToken).ConfigureAwait(false);
         var segments = byGender
-            ? await PlanByGenderAsync(video, cues, audioIndex, config, Stage).ConfigureAwait(false)
+            ? await PlanByGenderAsync(video, cues, audioIndex, config, Stage, cancellationToken).ConfigureAwait(false)
             : DubPlanner.Plan(cues, config.DubSkipSongs);
 
         // 1) Speech for every segment (cached on disk per line, so an interrupted run resumes for free).
@@ -252,7 +272,8 @@ public sealed class DubService
             string cache = ClipPath(video, tts, VoiceFor(segments[i]), config, segments[i].Text);
             if (File.Exists(cache))
             {
-                (clips[i], rate) = Wav.ReadPcm16Mono(await File.ReadAllBytesAsync(cache).ConfigureAwait(false));
+                (clips[i], rate) = Wav.ReadPcm16Mono(await File.ReadAllBytesAsync(cache, cancellationToken).ConfigureAwait(false));
+                CacheCleaner.MarkUsed(cache);
             }
             else
             {
@@ -261,7 +282,8 @@ public sealed class DubService
         }
 
         var batches = Batches(missing, segments, config);
-        CheckBudget(config, tts.Estimate(missing.Sum(i => segments[i].Text.Length), missing.Sum(i => segments[i].Text.Length) / DubPlanner.CharactersPerSecond, config), video.Name);
+        int missingChars = missing.Sum(i => segments[i].Text.Length);
+        using var budget = _jobs.Ledger.Reserve(tts.Estimate(missingChars, missingChars / DubPlanner.CharactersPerSecond, config), config.MonthlyBudgetUsd, video.Name, DateTime.UtcNow);
 
         int perDay = tts.RequestsPerDay(config);
         string quotaKey = QuotaKey(tts, config);
@@ -282,7 +304,7 @@ public sealed class DubService
             Stage($"синтез на глас {done}/{segments.Count} ({batches.Count} заявки)");
             await Parallel.ForEachAsync(
                 batches,
-                new ParallelOptions { MaxDegreeOfParallelism = Math.Clamp(config.DubParallelism, 1, 8) },
+                new ParallelOptions { MaxDegreeOfParallelism = Math.Clamp(config.DubParallelism, 1, 8), CancellationToken = cancellationToken },
                 async (batch, ct) =>
                 {
                     string text = string.Join(tts.LineSeparator(config), batch.Select(i => segments[i].Text));
@@ -297,7 +319,9 @@ public sealed class DubService
                         clips[batch[k]] = pieces[k];
                         string cache = ClipPath(video, tts, batchVoice, config, segments[batch[k]].Text);
                         Directory.CreateDirectory(Path.GetDirectoryName(cache)!);
-                        await File.WriteAllBytesAsync(cache, Wav.WritePcm16Mono(pieces[k], clip.SampleRate), ct).ConfigureAwait(false);
+
+                        // Paid for: saved even if the run is being stopped.
+                        await File.WriteAllBytesAsync(cache, Wav.WritePcm16Mono(pieces[k], clip.SampleRate), CancellationToken.None).ConfigureAwait(false);
                     }
 
                     Stage($"синтез на глас {Interlocked.Add(ref done, batch.Count)}/{segments.Count}");
@@ -325,7 +349,7 @@ public sealed class DubService
             var durations = clips.Select(c => TimeSpan.FromSeconds(c.Length / (double)rate)).ToList();
             var placed = DubPlanner.Place(segments, durations, config.DubMaxTempo);
             string narration = Path.Combine(work, "narration.raw");
-            await WriteNarrationAsync(narration, clips, placed, rate, work).ConfigureAwait(false);
+            await WriteNarrationAsync(narration, clips, placed, rate, work, cancellationToken).ConfigureAwait(false);
             _logger.LogInformation(
                 "AI Translate: voice-over {Title}: {Count} segments, {Fast} sped up, {Late} shifted",
                 video.Name,
@@ -337,14 +361,23 @@ public sealed class DubService
             Stage("миксиране със звука на филма");
             string output = OutputPath(video, language);
             string part = Path.Combine(Path.GetDirectoryName(output)!, "." + Path.GetFileName(output) + ".part");
-            var r = await AudioExtractor.RunAsync(_mediaEncoder.EncoderPath, MixArguments(video.Path, audioIndex, narration, rate, language, part), CancellationToken.None).ConfigureAwait(false);
-            if (r.ExitCode != 0)
+            try
             {
+                var r = await AudioExtractor.RunAsync(_mediaEncoder.EncoderPath, MixArguments(video.Path, audioIndex, narration, rate, language, part), cancellationToken).ConfigureAwait(false);
+                if (r.ExitCode != 0)
+                {
+                    throw new InvalidOperationException("ffmpeg mix failed: " + (r.StdErr.Length > 600 ? r.StdErr[^600..] : r.StdErr));
+                }
+
+                File.Move(part, output, overwrite: true);
+            }
+            catch
+            {
+                // A half-written track next to the film must not stay (stopped, or ffmpeg failed).
                 File.Delete(part);
-                throw new InvalidOperationException("ffmpeg mix failed: " + (r.StdErr.Length > 600 ? r.StdErr[^600..] : r.StdErr));
+                throw;
             }
 
-            File.Move(part, output, overwrite: true);
             _logger.LogInformation("AI Translate: voice-over ready: {Output}", output);
         }
         finally
@@ -366,14 +399,14 @@ public sealed class DubService
     }
 
     /// <summary>Speaker classes from the film's dialogue channel, then the line plan (male/female voices).</summary>
-    private async Task<List<DubSegment>> PlanByGenderAsync(Video video, IReadOnlyList<Cue> cues, int audioIndex, PluginConfiguration config, Action<string> stage)
+    private async Task<List<DubSegment>> PlanByGenderAsync(Video video, IReadOnlyList<Cue> cues, int audioIndex, PluginConfiguration config, Action<string> stage, CancellationToken cancellationToken)
     {
         stage("анализ на гласовете (мъжки/женски)");
         var raw = Path.Combine(_appPaths.TempDirectory, "ai-translate", Guid.NewGuid().ToString("N") + ".raw");
         Directory.CreateDirectory(Path.GetDirectoryName(raw)!);
         try
         {
-            await VoicePitch.ExtractDialogueAsync(_mediaEncoder.EncoderPath, _mediaEncoder.ProbePath, video.Path, audioIndex, raw, CancellationToken.None).ConfigureAwait(false);
+            await VoicePitch.ExtractDialogueAsync(_mediaEncoder.EncoderPath, _mediaEncoder.ProbePath, video.Path, audioIndex, raw, cancellationToken).ConfigureAwait(false);
             await using var dialogue = File.OpenRead(raw);
             var segments = DubPlanner.Plan(
                 cues,
@@ -434,38 +467,38 @@ public sealed class DubService
         ];
     }
 
-    private async Task WriteNarrationAsync(string path, short[][] clips, IReadOnlyList<PlacedClip> placed, int rate, string work)
+    private async Task WriteNarrationAsync(string path, short[][] clips, IReadOnlyList<PlacedClip> placed, int rate, string work, CancellationToken cancellationToken)
     {
         await using var file = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 16);
         long written = 0;
         var zeros = new byte[1 << 16];
         for (int i = 0; i < clips.Length; i++)
         {
-            var samples = placed[i].Tempo > 1.01 ? await StretchAsync(clips[i], rate, placed[i].Tempo, work).ConfigureAwait(false) : clips[i];
+            var samples = placed[i].Tempo > 1.01 ? await StretchAsync(clips[i], rate, placed[i].Tempo, work, cancellationToken).ConfigureAwait(false) : clips[i];
             long startSample = (long)(placed[i].Start.TotalSeconds * rate);
             for (long gap = (startSample - written) * 2; gap > 0; gap -= zeros.Length)
             {
-                await file.WriteAsync(zeros.AsMemory(0, (int)Math.Min(gap, zeros.Length))).ConfigureAwait(false);
+                await file.WriteAsync(zeros.AsMemory(0, (int)Math.Min(gap, zeros.Length)), cancellationToken).ConfigureAwait(false);
             }
 
             written = Math.Max(written, startSample);
             var bytes = new byte[samples.Length * 2];
             Buffer.BlockCopy(samples, 0, bytes, 0, bytes.Length);
-            await file.WriteAsync(bytes).ConfigureAwait(false);
+            await file.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
             written += samples.Length;
         }
     }
 
-    private async Task<short[]> StretchAsync(short[] samples, int rate, double tempo, string work)
+    private async Task<short[]> StretchAsync(short[] samples, int rate, double tempo, string work, CancellationToken cancellationToken)
     {
         string input = Path.Combine(work, "clip-in.wav");
         string output = Path.Combine(work, "clip-out.wav");
-        await File.WriteAllBytesAsync(input, Wav.WritePcm16Mono(samples, rate)).ConfigureAwait(false);
+        await File.WriteAllBytesAsync(input, Wav.WritePcm16Mono(samples, rate), cancellationToken).ConfigureAwait(false);
         var r = await AudioExtractor.RunAsync(
             _mediaEncoder.EncoderPath,
             ["-hide_banner", "-nostdin", "-v", "error", "-y", "-i", input, "-filter:a", "atempo=" + tempo.ToString("0.000", CultureInfo.InvariantCulture), "-c:a", "pcm_s16le", "-ar", rate.ToString(CultureInfo.InvariantCulture), "-ac", "1", output],
-            CancellationToken.None).ConfigureAwait(false);
-        return r.ExitCode == 0 ? Wav.ReadPcm16Mono(await File.ReadAllBytesAsync(output).ConfigureAwait(false)).Samples : samples;
+            cancellationToken).ConfigureAwait(false);
+        return r.ExitCode == 0 ? Wav.ReadPcm16Mono(await File.ReadAllBytesAsync(output, cancellationToken).ConfigureAwait(false)).Samples : samples;
     }
 
     private async Task<List<Cue>> ReadSubtitleAsync(Video video, MediaStream stream, CancellationToken cancellationToken)
@@ -476,7 +509,7 @@ public sealed class DubService
             string path = stream.IsExternal
                 ? stream.Path
                 : await SubtitleSources.ExtractEmbeddedAsync(video.Path, stream.Index, _mediaEncoder.EncoderPath, work, cancellationToken).ConfigureAwait(false);
-            return await SubtitleSources.ReadAsync(path, _mediaEncoder.EncoderPath, work, stripHearingImpaired: true, cancellationToken).ConfigureAwait(false);
+            return await SubtitleSources.ReadAsync(path, _mediaEncoder.EncoderPath, work, stripHearingImpaired: true, stream.Language, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -493,11 +526,13 @@ public sealed class DubService
         }
     }
 
+    // Text subtitles in the language, external first; this plugin's "being generated" / "failed" notes are not subtitles.
     private static MediaStream? FindSubtitle(Video video, string language) =>
         video.GetMediaStreams()
             .Where(s => s.Type == MediaStreamType.Subtitle && !s.IsForced && !string.IsNullOrEmpty(s.Language)
                 && Languages.ToTwoLetter(s.Language!) == language
-                && s.Codec is "subrip" or "srt" or "ass" or "ssa" or "mov_text" or "webvtt" or "vtt")
+                && SubtitleSources.IsTextCodec(s.Codec)
+                && !(s.IsExternal && AiSubtitleProvider.IsPlaceholder(s.Path)))
             .OrderBy(s => s.IsExternal ? 0 : 1)
             .FirstOrDefault();
 
@@ -525,15 +560,6 @@ public sealed class DubService
         }
 
         return shared;
-    }
-
-    private void CheckBudget(PluginConfiguration config, double estimate, string title)
-    {
-        double spent = _jobs.Ledger.MonthTotal(DateTime.UtcNow);
-        if (config.MonthlyBudgetUsd > 0 && spent + estimate > config.MonthlyBudgetUsd)
-        {
-            throw new BudgetExceededException($"Месечният лимит ${config.MonthlyBudgetUsd:0.00} би бил надхвърлен: похарчени ${spent:0.00} + ≈${estimate:0.00} за „{title}“.");
-        }
     }
 
     private void RecordUsage(string title, IEnumerable<Usage> usage)
