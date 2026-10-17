@@ -1,1 +1,21 @@
-[]
+[
+  {
+    "guid": "4cad7295-fa8b-46c9-a2e0-b6e5abe8a234",
+    "name": "AI Translate",
+    "overview": "AI subtitles and voice-over: translate a subtitle or recognise the audio, priced before you choose",
+    "description": "Adds an AI subtitle provider to Jellyfin's subtitle search: translates an existing subtitle (embedded, external or from another provider) or recognises the speech in the audio track (OpenAI, Google Gemini) and translates it with an LLM. Shows the estimated price before you choose; monthly budget, cost log, stop button and disk clean-up. Also makes a TV-style AI voice-over audio track from subtitles in your language.",
+    "imageUrl": "https://raw.githubusercontent.com/HA-HUB-I/jellyfin-plugin-ai-translate/main/images/logo.png",
+    "owner": "HA-HUB-I",
+    "category": "General",
+    "versions": [
+      {
+        "version": "0.2.0.0",
+        "changelog": "- Release 0.2.0: logo, catalog description, manifest image\n- Stop button, budget holds, cache clean-up; fix silent failures found in review\n- Repair broken recognition timings (words lasting minutes, out of order)\n- Subtitle download: immediate feedback while long jobs run\n- Voice-over: male/female voices from the original speaker's pitch\n- Dubbing: share the voice clip cache across films/releases\n- Settings: one active provider per function, provider sub-tabs, key checks\n- Stop at once on an empty OpenAI balance; no realtime/live models for file transcription\n- Model list: keep image models (nano-banana) out of the translation list\n- Settings page: tabs, model drop-downs from the accounts' live lists, working Save\n- Daily quota tracking and warnings, OpenAI voice provider, limits documented\n- Dubbing: keep the track as long as the film; speech-rate estimate from a full film\n- Dubbing: several lines per TTS request, split at pauses; daily quota aware\n- Voice-over (AI dubbing) from target-language subtitles with Gemini TTS\n- README: subtitle is saved even if the client stops waiting\n- Translate existing subtitles, Gemini rate limits, cheaper translation, dialogue lines\n- AI Translate 0.1.0: AI subtitles from the audio track as a Jellyfin subtitle provider",
+        "targetAbi": "12.2.0.0",
+        "sourceUrl": "https://github.com/HA-HUB-I/jellyfin-plugin-ai-translate/releases/download/v0.2.0/ai-translate_0.2.0.0.zip",
+        "checksum": "d37a56f7fa470e838eeda11834923224",
+        "timestamp": "2026-10-17T18:28:08Z"
+      }
+    ]
+  }
+]
