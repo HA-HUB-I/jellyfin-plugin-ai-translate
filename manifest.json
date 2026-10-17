@@ -9,6 +9,14 @@
     "category": "General",
     "versions": [
       {
+        "version": "0.2.1.0",
+        "changelog": "- Gemini: ask again when a transcription ends \"incomplete\"; log failed jobs\n- CI: actions/checkout v7 and setup-dotnet v6 (Node 24)\n- manifest: 0.2.0.0",
+        "targetAbi": "12.2.0.0",
+        "sourceUrl": "https://github.com/HA-HUB-I/jellyfin-plugin-ai-translate/releases/download/v0.2.1/ai-translate_0.2.1.0.zip",
+        "checksum": "97c46f6a723f6f9fdeabd257e46214d8",
+        "timestamp": "2026-10-17T19:37:59Z"
+      },
+      {
         "version": "0.2.0.0",
         "changelog": "- Release 0.2.0: logo, catalog description, manifest image\n- Stop button, budget holds, cache clean-up; fix silent failures found in review\n- Repair broken recognition timings (words lasting minutes, out of order)\n- Subtitle download: immediate feedback while long jobs run\n- Voice-over: male/female voices from the original speaker's pitch\n- Dubbing: share the voice clip cache across films/releases\n- Settings: one active provider per function, provider sub-tabs, key checks\n- Stop at once on an empty OpenAI balance; no realtime/live models for file transcription\n- Model list: keep image models (nano-banana) out of the translation list\n- Settings page: tabs, model drop-downs from the accounts' live lists, working Save\n- Daily quota tracking and warnings, OpenAI voice provider, limits documented\n- Dubbing: keep the track as long as the film; speech-rate estimate from a full film\n- Dubbing: several lines per TTS request, split at pauses; daily quota aware\n- Voice-over (AI dubbing) from target-language subtitles with Gemini TTS\n- README: subtitle is saved even if the client stops waiting\n- Translate existing subtitles, Gemini rate limits, cheaper translation, dialogue lines\n- AI Translate 0.1.0: AI subtitles from the audio track as a Jellyfin subtitle provider",
         "targetAbi": "12.2.0.0",
