@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 
@@ -35,6 +36,10 @@ public static class Languages
                 || string.Equals(c.ThreeLetterISOLanguageName, code, StringComparison.OrdinalIgnoreCase));
         return culture?.EnglishName ?? code;
     }
+
+    /// <summary>A comma-separated language setting as ISO 639-1 codes, in order ("bul, EN" → bg, en).</summary>
+    public static List<string> ParseList(string setting) =>
+        setting.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Select(ToTwoLetter).Distinct(StringComparer.Ordinal).ToList();
 
     /// <summary>Normalizes "bul"/"bg"/"BG" to "bg".</summary>
     public static string ToTwoLetter(string code)

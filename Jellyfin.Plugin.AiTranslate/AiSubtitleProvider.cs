@@ -522,9 +522,7 @@ public sealed partial class AiSubtitleProvider : ISubtitleProvider
         return allowed.Count == 0 || allowed.Contains(lang, StringComparer.OrdinalIgnoreCase);
     }
 
-    /// <summary>A comma-separated language setting as ISO 639-1 codes ("bul, EN" → bg, en).</summary>
-    private static List<string> LanguageList(string setting) =>
-        setting.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Select(Languages.ToTwoLetter).Distinct(StringComparer.Ordinal).ToList();
+    private static List<string> LanguageList(string setting) => Languages.ParseList(setting);
 
     private static string Title(SubtitleSearchRequest r)
     {

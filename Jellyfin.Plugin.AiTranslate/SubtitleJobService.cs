@@ -53,6 +53,9 @@ public sealed class SubtitleJobService
     // Dialogue density when the line count is unknown (measured 8–10 lines per minute; rounded up).
     private const double CuesPerMinute = 12;
 
+    // A piece the recogniser gives up on is halved until it is this short (see TranscribePieceAsync).
+    private static readonly TimeSpan MinPiece = TimeSpan.FromSeconds(45);
+
     private readonly IReadOnlyList<ITranscriber> _transcribers;
     private readonly IReadOnlyList<ITranslator> _translators;
     private readonly IMediaEncoder _mediaEncoder;
@@ -373,8 +376,20 @@ public sealed class SubtitleJobService
         {
             stage("извличане на аудио");
             var chunkLength = transcriber.ChunkLength(config);
-            int audioIndex = await extractor.GetDefaultAudioIndexAsync(job.MediaPath, cancellationToken).ConfigureAwait(false);
+            int audioIndex = await extractor.GetAudioIndexAsync(job.MediaPath, Languages.ParseList(config.SourceLanguages), cancellationToken).ConfigureAwait(false);
             var chunks = await extractor.ExtractAsync(job.MediaPath, audioIndex, chunkLength, work, cancellationToken).ConfigureAwait(false);
+
+            int cuts = 0;
+            async Task<IReadOnlyList<AudioChunk>> Halve(AudioChunk piece, CancellationToken ct)
+            {
+                var half = TimeSpan.FromSeconds(Math.Round(piece.Duration.TotalSeconds / 2, 3));
+                int n = Interlocked.Increment(ref cuts);
+                return
+                [
+                    await extractor.CutAsync(piece, TimeSpan.Zero, half, Path.Combine(work, $"piece{n:000}a.mp3"), ct).ConfigureAwait(false),
+                    await extractor.CutAsync(piece, half, piece.Duration - half, Path.Combine(work, $"piece{n:000}b.mp3"), ct).ConfigureAwait(false),
+                ];
+            }
 
             // The same file, track, model and chunk length give the same chunks, so recognised ones can be reused.
             string chunkCache = Path.Combine(
@@ -383,7 +398,7 @@ public sealed class SubtitleJobService
                 Hash(string.Create(CultureInfo.InvariantCulture, $"{transcriber.Id}|{TranscribeModel(transcriber, config)}|{(int)chunkLength.TotalSeconds}|{audioIndex}|{MediaStamp(job.MediaPath)}")));
             int done = 0;
             stage($"разпознаване на говор 0/{chunks.Count}");
-            var parts = await TranscribeChunksAsync(transcriber, chunks, config, chunkCache, usage, () => stage($"разпознаване на говор {Interlocked.Increment(ref done)}/{chunks.Count}"), cancellationToken).ConfigureAwait(false);
+            var parts = await TranscribeChunksAsync(transcriber, chunks, config, chunkCache, usage, () => stage($"разпознаване на говор {Interlocked.Increment(ref done)}/{chunks.Count}"), Halve, _logger, cancellationToken).ConfigureAwait(false);
 
             var cues = parts
                 .SelectMany((p, i) => p.Cues.Select(c => c with { Start = c.Start + chunks[i].Offset, End = c.End + chunks[i].Offset }))
@@ -416,6 +431,8 @@ public sealed class SubtitleJobService
         string cacheDir,
         ICollection<Usage> usage,
         Action progress,
+        Func<AudioChunk, CancellationToken, Task<IReadOnlyList<AudioChunk>>>? halve = null,
+        ILogger? logger = null,
         CancellationToken cancellationToken = default)
     {
         var parts = new Transcription[chunks.Count];
@@ -428,11 +445,7 @@ public sealed class SubtitleJobService
                 var part = await ReadChunkAsync(cache, ct).ConfigureAwait(false);
                 if (part is null)
                 {
-                    part = await transcriber.TranscribeAsync(chunks[i], config, ct).ConfigureAwait(false);
-                    lock (usage)
-                    {
-                        usage.Add(part.Usage);
-                    }
+                    part = await TranscribePieceAsync(transcriber, chunks[i], config, usage, halve, logger, ct).ConfigureAwait(false);
 
                     // Paid for: saved even if the job is being stopped.
                     Directory.CreateDirectory(cacheDir);
@@ -443,6 +456,66 @@ public sealed class SubtitleJobService
                 progress();
             }).ConfigureAwait(false);
         return parts;
+    }
+
+    /// <summary>
+    /// Recognises one piece of audio. When the recogniser gives up on it (<see cref="TranscriptionIncompleteException"/>:
+    /// it got stuck, and would again on the same file), the piece is cut in two and each half is recognised, down to
+    /// 45 s. A piece that short that still fails holds no usable speech (music, fighting): it stays without subtitles,
+    /// with a warning, instead of failing the whole film. Every request — also a failed one — is added to
+    /// <paramref name="usage"/>.
+    /// </summary>
+    internal static async Task<Transcription> TranscribePieceAsync(
+        ITranscriber transcriber,
+        AudioChunk piece,
+        PluginConfiguration config,
+        ICollection<Usage> usage,
+        Func<AudioChunk, CancellationToken, Task<IReadOnlyList<AudioChunk>>>? halve,
+        ILogger? logger,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var part = await transcriber.TranscribeAsync(piece, config, cancellationToken).ConfigureAwait(false);
+            lock (usage)
+            {
+                usage.Add(part.Usage);
+            }
+
+            return part;
+        }
+        catch (TranscriptionIncompleteException ex)
+        {
+            lock (usage)
+            {
+                usage.Add(ex.Usage);
+            }
+
+            var none = new Usage(transcriber.Id, string.Empty, 0, 0, 0, 0);
+            if (halve is null)
+            {
+                throw;
+            }
+
+            if (piece.Duration <= MinPiece * 1.01)
+            {
+                logger?.LogWarning(ex, "AI Translate: no usable speech recognised at {Start} ({Seconds:0} s); that stretch stays without subtitles", piece.Offset, piece.Duration.TotalSeconds);
+                return new Transcription([], null, none);
+            }
+
+            logger?.LogInformation("AI Translate: the recogniser gave up on {Seconds:0} s at {Start}; trying it in two halves", piece.Duration.TotalSeconds, piece.Offset);
+            var cues = new List<Cue>();
+            string? language = null;
+            foreach (var half in await halve(piece, cancellationToken).ConfigureAwait(false))
+            {
+                var part = await TranscribePieceAsync(transcriber, half, config, usage, halve, logger, cancellationToken).ConfigureAwait(false);
+                var shift = half.Offset - piece.Offset;
+                cues.AddRange(part.Cues.Select(c => c with { Start = c.Start + shift, End = c.End + shift }));
+                language ??= part.Language;
+            }
+
+            return new Transcription(cues, language, none);
+        }
     }
 
     private static async Task<Transcription?> ReadChunkAsync(string path, CancellationToken cancellationToken)

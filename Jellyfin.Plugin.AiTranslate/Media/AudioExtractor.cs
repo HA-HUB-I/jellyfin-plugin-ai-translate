@@ -14,9 +14,14 @@ namespace Jellyfin.Plugin.AiTranslate.Media;
 /// <summary>A piece of the audio track and where it starts in the film.</summary>
 public sealed record AudioChunk(string Path, TimeSpan Offset, TimeSpan Duration);
 
+/// <summary>An audio stream of the media: its position among the audio streams, language tag and flags.</summary>
+public sealed record AudioTrack(int Position, string? Language, bool IsDefault, bool Commentary);
+
 /// <summary>Extracts a speech-friendly audio track (mono, 16 kHz, low bitrate MP3) in chunks with Jellyfin's ffmpeg.</summary>
 public sealed class AudioExtractor
 {
+    private static readonly string[] CommentaryWords = ["comment", "коментар", "description", "описание"];
+
     private readonly string _ffmpeg;
     private readonly string _ffprobe;
 
@@ -32,29 +37,70 @@ public sealed class AudioExtractor
         return double.TryParse(r.StdOut.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var s) ? TimeSpan.FromSeconds(s) : TimeSpan.Zero;
     }
 
-    /// <summary>Returns the index (among audio streams) of the default audio track, or 0.</summary>
-    public async Task<int> GetDefaultAudioIndexAsync(string mediaPath, CancellationToken cancellationToken)
+    /// <summary>
+    /// Returns the index (among audio streams) of the track to use: the first one in a preferred language (usually the
+    /// film's original — releases often make a dub the default, e.g. Russian before English), else the default track,
+    /// else the first. Commentary and audio-description tracks are skipped.
+    /// </summary>
+    public async Task<int> GetAudioIndexAsync(string mediaPath, IReadOnlyList<string> preferredLanguages, CancellationToken cancellationToken)
     {
-        var r = await RunAsync(_ffprobe, ["-v", "error", "-select_streams", "a", "-show_entries", "stream=index:stream_disposition=default", "-of", "json", mediaPath], cancellationToken).ConfigureAwait(false);
+        var r = await RunAsync(
+            _ffprobe,
+            ["-v", "error", "-select_streams", "a", "-show_entries", "stream=index:stream_disposition=default,comment,visual_impaired:stream_tags=language,title", "-of", "json", mediaPath],
+            cancellationToken).ConfigureAwait(false);
+        var tracks = new List<AudioTrack>();
         try
         {
             using var json = JsonDocument.Parse(r.StdOut);
-            int i = 0;
             foreach (var s in json.RootElement.GetProperty("streams").EnumerateArray())
             {
-                if (s.TryGetProperty("disposition", out var d) && d.TryGetProperty("default", out var def) && def.GetInt32() == 1)
-                {
-                    return i;
-                }
-
-                i++;
+                bool Flag(string name) => s.TryGetProperty("disposition", out var d) && d.TryGetProperty(name, out var v) && v.GetInt32() == 1;
+                string? Tag(string name) => s.TryGetProperty("tags", out var t) && t.TryGetProperty(name, out var v) ? v.GetString() : null;
+                string title = Tag("title") ?? string.Empty;
+                bool commentary = Flag("comment") || Flag("visual_impaired")
+                    || CommentaryWords.Any(w => title.Contains(w, StringComparison.OrdinalIgnoreCase));
+                tracks.Add(new AudioTrack(tracks.Count, Tag("language"), Flag("default"), commentary));
             }
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException)
         {
         }
 
-        return 0;
+        return ChooseAudio(tracks, preferredLanguages);
+    }
+
+    internal static int ChooseAudio(IReadOnlyList<AudioTrack> tracks, IReadOnlyList<string> preferredLanguages)
+    {
+        foreach (var language in preferredLanguages)
+        {
+            var match = tracks
+                .Where(t => !t.Commentary && !string.IsNullOrEmpty(t.Language) && Providers.Languages.ToTwoLetter(t.Language) == language)
+                .OrderByDescending(t => t.IsDefault)
+                .FirstOrDefault();
+            if (match is not null)
+            {
+                return match.Position;
+            }
+        }
+
+        return (tracks.FirstOrDefault(t => t.IsDefault) ?? tracks.FirstOrDefault())?.Position ?? 0;
+    }
+
+    /// <summary>Cuts [start, start + length) of a piece into a new MP3 (re-encoded, so the cut is exact).</summary>
+    public async Task<AudioChunk> CutAsync(AudioChunk source, TimeSpan start, TimeSpan length, string output, CancellationToken cancellationToken)
+    {
+        string Seconds(TimeSpan t) => t.TotalSeconds.ToString("0.###", CultureInfo.InvariantCulture);
+        var r = await RunAsync(
+            _ffmpeg,
+            ["-hide_banner", "-nostdin", "-nostats", "-v", "error", "-y", "-ss", Seconds(start), "-t", Seconds(length), "-i", source.Path,
+             "-ac", "1", "-ar", "16000", "-c:a", "libmp3lame", "-b:a", "32k", output],
+            cancellationToken).ConfigureAwait(false);
+        if (r.ExitCode != 0)
+        {
+            throw new InvalidOperationException("ffmpeg could not cut the audio: " + Tail(r.StdErr));
+        }
+
+        return new AudioChunk(output, source.Offset + start, length);
     }
 
     /// <summary>Writes the chosen audio track as MP3 chunks of at most <paramref name="chunkLength"/> into <paramref name="workDir"/>.</summary>

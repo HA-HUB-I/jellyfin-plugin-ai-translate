@@ -256,7 +256,7 @@ public sealed class DubService
         Stage("четене на субтитрите");
         var cues = await ReadSubtitleAsync(video, stream, cancellationToken).ConfigureAwait(false);
         var extractor = new AudioExtractor(_mediaEncoder.EncoderPath, _mediaEncoder.ProbePath);
-        int audioIndex = await extractor.GetDefaultAudioIndexAsync(video.Path, cancellationToken).ConfigureAwait(false);
+        int audioIndex = await extractor.GetAudioIndexAsync(video.Path, Languages.ParseList(config.SourceLanguages), cancellationToken).ConfigureAwait(false);
         var segments = byGender
             ? await PlanByGenderAsync(video, cues, audioIndex, config, Stage, cancellationToken).ConfigureAwait(false)
             : DubPlanner.Plan(cues, config.DubSkipSongs);

@@ -601,24 +601,30 @@ public class GeminiTranscribeTests
     private const string Completed = "{\"id\":\"interactions/2\",\"status\":\"completed\",\"steps\":[{\"content\":[{\"type\":\"text\",\"annotations\":[{\"type\":\"word_info\",\"text\":\"Hello.\",\"start_offset\":\"0.5s\",\"end_offset\":\"1.0s\"}]}]}]}";
 
     [Fact]
-    public async Task AsksAgainWhenATranscriptionComesBackIncomplete()
+    public async Task IncompleteIsHandedBackAtOnceForTheChunkToBeCut()
     {
-        // Measured on The Old Guard 2: chunk 8 of 18 came back "incomplete", the same audio was complete right after.
+        // Measured on The Old Guard 2: the model got stuck on chunk 8 ("Клеш. Клеш. …" 737 times) and did the same on every
+        // retry of that file, so asking again only costs money.
         int interactions = 0;
-        var (http, result) = await Transcribe(() => ++interactions == 1 ? "{\"id\":\"interactions/1\",\"status\":\"incomplete\"}" : Completed);
+        var ex = await Assert.ThrowsAsync<TranscriptionIncompleteException>(() => Transcribe(() => { interactions++; return "{\"id\":\"interactions/1\",\"status\":\"incomplete\"}"; }));
+        Assert.Equal(1, interactions);
+        Assert.Equal(6, ex.Usage.AudioMinutes, 6);                            // the failed request is paid for too
+    }
+
+    [Fact]
+    public async Task FailedOnGooglesSideIsAskedAgain()
+    {
+        int interactions = 0;
+        var (http, result) = await Transcribe(() => ++interactions == 1 ? "{\"id\":\"interactions/1\",\"status\":\"failed\"}" : Completed);
         Assert.Equal(2, interactions);
         Assert.Equal("Hello.", Assert.Single(result.Cues).Text);
         Assert.Equal(12, result.Usage.AudioMinutes, 6);                      // both requests sent the whole 6-minute chunk
         Assert.Contains(http.Requests, r => r.StartsWith("DELETE", StringComparison.Ordinal));
-    }
 
-    [Fact]
-    public async Task GivesUpAfterThreeIncompleteAnswersAndStillDeletesTheUpload()
-    {
-        int interactions = 0;
-        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => Transcribe(() => { interactions++; return "{\"id\":\"interactions/1\",\"status\":\"incomplete\"}"; }));
-        Assert.Contains("\"incomplete\" 3 times", ex.Message, StringComparison.Ordinal);
+        interactions = 0;
+        var ex = await Assert.ThrowsAsync<TranscriptionIncompleteException>(() => Transcribe(() => { interactions++; return "{\"id\":\"interactions/1\",\"status\":\"failed\"}"; }));
         Assert.Equal(3, interactions);
+        Assert.Equal(18, ex.Usage.AudioMinutes, 6);
     }
 
     private static async Task<(FakeHttp Http, Transcription Result)> Transcribe(Func<string> interactionAnswer)
@@ -685,6 +691,93 @@ internal sealed class FakeHttp : IHttpClientFactory
             }
 
             return Task.FromResult(_owner._respond(request));
+        }
+    }
+}
+
+public class AudioPieceTests
+{
+    [Fact]
+    public void PrefersTheSourceLanguageTrackOverADubbedDefault()
+    {
+        // The Old Guard 2 release: default Russian, then Ukrainian, two dubs, English (original) last.
+        Media.AudioTrack[] oldGuard =
+        [
+            new(0, "rus", true, false), new(1, "ukr", false, false), new(2, "rus", false, false), new(3, "ukr", false, false), new(4, "eng", false, false),
+        ];
+        Assert.Equal(4, Media.AudioExtractor.ChooseAudio(oldGuard, ["en"]));
+        Assert.Equal(0, Media.AudioExtractor.ChooseAudio(oldGuard, ["de"]));          // no German: the default
+        Assert.Equal(1, Media.AudioExtractor.ChooseAudio(oldGuard, ["de", "uk"]));    // first preferred language that exists
+
+        Media.AudioTrack[] withCommentary = [new(0, "eng", false, true), new(1, "eng", true, false)];
+        Assert.Equal(1, Media.AudioExtractor.ChooseAudio(withCommentary, ["en"]));
+        Assert.Equal(0, Media.AudioExtractor.ChooseAudio([], ["en"]));
+    }
+
+    [Fact]
+    public async Task APieceTheRecogniserGivesUpOnIsHalvedUntilItWorks()
+    {
+        // Gives up on anything longer than 100 s; shorter pieces have one line one second in.
+        var recogniser = new HalvingFake(giveUpAbove: TimeSpan.FromSeconds(100));
+        var usage = new List<Usage>();
+        var part = await SubtitleJobService.TranscribePieceAsync(recogniser, new Media.AudioChunk("c007", TimeSpan.FromSeconds(2520), TimeSpan.FromSeconds(360)), new Configuration.PluginConfiguration(), usage, Halve, null, CancellationToken.None);
+
+        // 360 → 2 × 180 → 4 × 90 s; times are relative to the chunk, as for an uncut one.
+        Assert.Equal([1, 91, 181, 271], part.Cues.Select(c => c.Start.TotalSeconds));
+        Assert.Equal(3 + 4, usage.Count);                                        // the 3 failed requests count too
+        Assert.Equal((360 + 180 + 180) / 60.0, usage.Where(u => u.CostUsd < 0).Sum(u => u.AudioMinutes), 6);
+    }
+
+    [Fact]
+    public async Task StretchWithoutUsableSpeechStaysEmptyInsteadOfFailingTheFilm()
+    {
+        var recogniser = new HalvingFake(giveUpAbove: TimeSpan.Zero);          // gives up on everything
+        var usage = new List<Usage>();
+        var part = await SubtitleJobService.TranscribePieceAsync(recogniser, new Media.AudioChunk("c007", TimeSpan.Zero, TimeSpan.FromSeconds(360)), new Configuration.PluginConfiguration(), usage, Halve, null, CancellationToken.None);
+        Assert.Empty(part.Cues);
+        Assert.Equal(1 + 2 + 4 + 8, usage.Count);                               // 360, 180, 90, 45 s: then it stops
+
+        // Without a way to cut, the error goes up (the job stops; finished chunks stay cached).
+        await Assert.ThrowsAsync<TranscriptionIncompleteException>(() => SubtitleJobService.TranscribePieceAsync(recogniser, new Media.AudioChunk("c", TimeSpan.Zero, TimeSpan.FromSeconds(360)), new Configuration.PluginConfiguration(), new List<Usage>(), null, null, CancellationToken.None));
+    }
+
+    private static Task<IReadOnlyList<Media.AudioChunk>> Halve(Media.AudioChunk piece, CancellationToken ct)
+    {
+        var half = piece.Duration / 2;
+        return Task.FromResult<IReadOnlyList<Media.AudioChunk>>([new(piece.Path + "a", piece.Offset, half), new(piece.Path + "b", piece.Offset + half, piece.Duration - half)]);
+    }
+
+    private sealed class HalvingFake : ITranscriber
+    {
+        private readonly TimeSpan _giveUpAbove;
+
+        public HalvingFake(TimeSpan giveUpAbove) => _giveUpAbove = giveUpAbove;
+
+        public string Id => "gemini";
+
+        public int Parallelism => 1;
+
+        public string DisplayName(Configuration.PluginConfiguration config) => "Fake";
+
+        public bool IsAvailable(Configuration.PluginConfiguration config) => true;
+
+        public TimeSpan ChunkLength(Configuration.PluginConfiguration config) => TimeSpan.FromMinutes(6);
+
+        public TimeSpan EstimatedTime(TimeSpan duration, Configuration.PluginConfiguration config) => duration;
+
+        public double PricePerMinute(Configuration.PluginConfiguration config) => 0.005;
+
+        public Task<Transcription> TranscribeAsync(Media.AudioChunk chunk, Configuration.PluginConfiguration config, CancellationToken cancellationToken)
+        {
+            double minutes = chunk.Duration.TotalMinutes;
+            if (chunk.Duration > _giveUpAbove)
+            {
+                // Negative cost marks the failed requests for the test.
+                throw new TranscriptionIncompleteException("stuck", new Usage("gemini", "fake", minutes, 0, 0, -1));
+            }
+
+            var cue = new Cue(TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2), "line");
+            return Task.FromResult(new Transcription([cue], "en", new Usage("gemini", "fake", minutes, 0, 0, 0.001)));
         }
     }
 }

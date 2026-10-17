@@ -37,6 +37,39 @@ public interface ITranscriber
     Task<Transcription> TranscribeAsync(AudioChunk chunk, PluginConfiguration config, CancellationToken cancellationToken);
 }
 
+/// <summary>
+/// The recogniser gave up on this piece of audio: measured, Gemini got stuck repeating one word ("Клеш. Клеш. …" 737
+/// times) on a stretch of music and fighting, while the same audio cut slightly differently came back complete. Sending
+/// the same file again gives the same answer, so the piece is cut into shorter ones instead. <see cref="Usage"/> is what
+/// the failed request(s) cost.
+/// </summary>
+public sealed class TranscriptionIncompleteException : Exception
+{
+    public TranscriptionIncompleteException(string message, Usage usage)
+        : base(message)
+    {
+        Usage = usage;
+    }
+
+    public TranscriptionIncompleteException()
+    {
+        Usage = new Usage(string.Empty, string.Empty, 0, 0, 0, 0);
+    }
+
+    public TranscriptionIncompleteException(string message)
+        : this(message, new Usage(string.Empty, string.Empty, 0, 0, 0, 0))
+    {
+    }
+
+    public TranscriptionIncompleteException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+        Usage = new Usage(string.Empty, string.Empty, 0, 0, 0, 0);
+    }
+
+    public Usage Usage { get; }
+}
+
 /// <summary>Batch translation of subtitle lines with an LLM.</summary>
 public interface ITranslator
 {

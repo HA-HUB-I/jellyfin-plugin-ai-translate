@@ -29,7 +29,7 @@ public sealed class GeminiProvider : ITranscriber, ITranslator, IDisposable
         _httpClientFactory = httpClientFactory;
     }
 
-    /// <summary>Gets the pause before a transcription that ended "incomplete" is asked for again (tests use zero).</summary>
+    /// <summary>Gets the pause before a transcription that "failed" on Google's side is asked for again (tests use zero).</summary>
     internal TimeSpan RetryPause { get; init; } = TimeSpan.FromSeconds(10);
 
     // Gemini bills audio input at 25 tokens per second.
@@ -87,12 +87,13 @@ public sealed class GeminiProvider : ITranscriber, ITranslator, IDisposable
                 },
             };
             // A running or failed interaction has no words (or only some): never pass it on as a silent chunk — the
-            // transcript is cached, so the gap would stay in every subtitle made from it. "incomplete"/"failed" is a
-            // passing fault on Google's side (measured: the same chunk came back complete right after), so ask again.
-            string body = string.Empty;
-            string? status = null;
+            // transcript is cached, so the gap would stay in every subtitle made from it. "failed"/"expired"/"cancelled"
+            // are faults on Google's side: ask again. "incomplete" (or still running after 30 min) means the model got
+            // stuck on this audio and would do so again: the caller cuts the chunk into shorter pieces.
+            string body;
+            string? status;
             int attempts = 0;
-            while (attempts < MaxTranscribeAttempts)
+            while (true)
             {
                 attempts++;
                 body = await StartInteractionAsync(payload, chunk, config, cancellationToken).ConfigureAwait(false);
@@ -111,15 +112,15 @@ public sealed class GeminiProvider : ITranscriber, ITranslator, IDisposable
                     break;
                 }
 
-                if (attempts < MaxTranscribeAttempts)
+                if (status == "incomplete" || IsUnfinished(status) || attempts >= MaxTranscribeAttempts)
                 {
-                    await Task.Delay(RetryPause, cancellationToken).ConfigureAwait(false);
+                    double tried = chunk.Duration.TotalMinutes * attempts;
+                    throw new TranscriptionIncompleteException(
+                        string.Create(CultureInfo.InvariantCulture, $"Gemini transcription of {chunk.Duration.TotalSeconds:0} s at {chunk.Offset:hh\\:mm\\:ss} ended as \"{status}\": {(body.Length > 300 ? body[..300] : body)}"),
+                        new Usage(Id, config.GeminiTranscribeModel, tried, 0, 0, tried * config.PriceGeminiTranscribePerMinute));
                 }
-            }
 
-            if (IsUnfinished(status) || IsFailed(status))
-            {
-                throw new HttpRequestException(string.Create(CultureInfo.InvariantCulture, $"Gemini transcription of {chunk.Offset:hh\\:mm\\:ss} ended as \"{status}\" {attempts} times: {(body.Length > 300 ? body[..300] : body)}"));
+                await Task.Delay(RetryPause, cancellationToken).ConfigureAwait(false);
             }
 
             var words = ParseWordInfo(body);

@@ -33,8 +33,11 @@ found none. Finished AI subtitles are always listed (free).
 
 ## How the audio path works
 
-1. **Audio**: Jellyfin's ffmpeg extracts the default audio track as mono 16 kHz MP3 chunks (any container
-   Jellyfin plays: MKV, MP4, AVI, TS, M2TS, …).
+1. **Audio**: Jellyfin's ffmpeg extracts the audio track in your preferred source language (usually the original —
+   releases often make a dub the default track), else the default one, as mono 16 kHz MP3 chunks (any container
+   Jellyfin plays: MKV, MP4, AVI, TS, M2TS, …). If the recogniser gets stuck on a chunk (seen on music and fighting:
+   one word repeated hundreds of times), the chunk is cut in halves down to 45 s; a stretch that still fails has no
+   usable speech and stays without subtitles.
 2. **Speech → text with timings**
    - OpenAI `whisper-1` (segment timestamps), or
    - Google `gemini-3.5-transcribe` (word timestamps).
